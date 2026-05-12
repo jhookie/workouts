@@ -107,6 +107,7 @@
     .pill.shoulder { background: #2a1a3a; color: #c07aff; }
     .pill.micro { background: #1a3a2a; color: #7affb7; }
     .pill.intensity { background: #3a1a1a; color: #ff7a7a; }
+    .pill.core { background: #1a1a3a; color: #7a9bff; }
 
     button, .btn {
       background: var(--accent);
@@ -223,7 +224,6 @@
       grid-template-columns: 1.2fr repeat(4, 1fr);
       gap: 6px;
     }
-    .set-grid label { font-size: 10px; text-align: center; margin-bottom: 2px; }
     .set-grid input { padding: 8px 4px; font-size: 15px; }
     .prev {
       font-size: 11px;
@@ -232,6 +232,71 @@
       text-align: right;
     }
     .prev b { color: var(--text); }
+
+    .set-grid-5 {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+    }
+    .set-grid-5 input { padding: 10px 4px; font-size: 15px; }
+
+    /* Block/Week/Day selector */
+    .selector-summary {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .selector-summary .label {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+    }
+    .selector-summary .value { font-size: 18px; font-weight: 600; }
+    .selector-summary .edit {
+      background: var(--surface-2);
+      color: var(--accent);
+      font-size: 14px;
+      padding: 8px 14px;
+      width: auto;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .selector-body { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .pill-row .pill-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 9px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      width: auto;
+      font-weight: 500;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .pill-row .pill-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .pill-row-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
 
     .toast {
       position: fixed;
@@ -263,16 +328,6 @@
 
     .hidden { display: none !important; }
 
-    .history-item {
-      display: flex;
-      justify-content: space-between;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .history-item:last-child { border-bottom: none; }
-    .history-item .name { font-weight: 600; }
-    .history-item .sub { color: var(--muted); font-size: 13px; }
-
     .stat-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -280,30 +335,10 @@
     }
     .stat-grid .card { margin: 0; }
     .stat-grid .big { font-size: 26px; }
-
-    .setup-banner {
-      background: var(--warn);
-      color: #000;
-      padding: 10px 14px;
-      border-radius: 10px;
-      font-size: 13px;
-      font-weight: 500;
-      margin-bottom: 12px;
-    }
-    .setup-banner button {
-      background: #000;
-      color: #fff;
-      font-size: 13px;
-      padding: 8px 12px;
-      width: auto;
-      margin-top: 8px;
-    }
   </style>
 </head>
 <body>
-  <div class="app" id="app">
-    <!-- views injected by JS -->
-  </div>
+  <div class="app" id="app"></div>
 
   <nav class="bottom" id="nav">
     <button data-view="home" class="active">
@@ -318,25 +353,25 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/></svg>
       Run
     </button>
-    <button data-view="history">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-      History
+    <button data-view="pullups">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/></svg>
+      Pull-Ups
     </button>
   </nav>
 
   <div class="toast" id="toast"></div>
 
   <script>
-    // -------- Config --------
-    // First-run setup asks for these; they're stored in localStorage.
-    const DEFAULT_CONFIG_KEY = 'workoutAppConfig_v1';
-    const QUEUE_KEY = 'workoutQueue_v1';
-    const CACHE_KEY = 'workoutCache_v1';
+    // -------- localStorage keys --------
+    const CONFIG_KEY = 'workoutAppConfig_v1';
+    const QUEUE_KEY  = 'workoutQueue_v1';
+    const CACHE_KEY  = 'workoutCache_v1';
+    const PROG_KEY   = 'workoutProgram_v1';
 
     function getConfig() {
-      try { return JSON.parse(localStorage.getItem(DEFAULT_CONFIG_KEY) || '{}'); } catch (e) { return {}; }
+      try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}'); } catch (e) { return {}; }
     }
-    function setConfig(c) { localStorage.setItem(DEFAULT_CONFIG_KEY, JSON.stringify(c)); }
+    function setConfig(c) { localStorage.setItem(CONFIG_KEY, JSON.stringify(c)); }
 
     // -------- API --------
     async function api(action, params = {}, body = null) {
@@ -350,9 +385,6 @@
       const opts = body
         ? { method: 'POST', body: JSON.stringify({ ...body, token: cfg.token, action }) }
         : { method: 'GET' };
-      // Note: Apps Script doesn't need a content-type header (and setting one
-      // triggers a CORS preflight it can't answer). Leave it off.
-
       const res = await fetch(url.toString(), opts);
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'api error');
@@ -360,9 +392,7 @@
     }
 
     // -------- Offline queue --------
-    function queueRead() {
-      try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { return []; }
-    }
+    function queueRead() { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { return []; } }
     function queueWrite(q) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); }
     function queuePush(item) { const q = queueRead(); q.push(item); queueWrite(q); }
     async function flushQueue() {
@@ -370,11 +400,8 @@
       if (!q.length) return;
       const remaining = [];
       for (const item of q) {
-        try {
-          await api(item.action, {}, item.body);
-        } catch (e) {
-          remaining.push(item);
-        }
+        try { await api(item.action, {}, item.body); }
+        catch (e) { remaining.push(item); }
       }
       queueWrite(remaining);
       if (remaining.length < q.length) {
@@ -382,7 +409,7 @@
       }
     }
 
-    // -------- Helpers --------
+    // -------- DOM helpers --------
     function $(sel, root = document) { return root.querySelector(sel); }
     function el(tag, attrs = {}, children = []) {
       const n = document.createElement(tag);
@@ -400,8 +427,7 @@
       return n;
     }
     function fmtDateLong(d) {
-      const opts = { weekday: 'long', month: 'long', day: 'numeric' };
-      return new Date(d).toLocaleDateString('en-US', opts);
+      return new Date(d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     }
     function todayISO() {
       const d = new Date();
@@ -410,7 +436,6 @@
     function categoryClass(cat) {
       if (!cat) return '';
       const c = cat.toLowerCase();
-      if (c.includes('chest') && c.includes('tri')) return 'chest';
       if (c.includes('chest')) return 'chest';
       if (c.includes('back')) return 'back';
       if (c.includes('bicep')) return 'bicep';
@@ -418,6 +443,7 @@
       if (c.includes('shoulder')) return 'shoulder';
       if (c.includes('micro')) return 'micro';
       if (c.includes('intensity')) return 'intensity';
+      if (c.includes('core')) return 'core';
       return '';
     }
     let toastTimer;
@@ -430,10 +456,29 @@
       toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
     }
 
-    // -------- Views --------
+    // -------- App state --------
     let currentView = 'home';
     let todayCache = null;
+    let programCache = null; // BLOCKS array + phases from /config
+    let liftSelection = null; // { block: 'Block 1', week: 4, day: 'A' }
+    let selectorOpen = false;
 
+    async function loadProgram() {
+      if (programCache) return programCache;
+      try {
+        const stored = JSON.parse(localStorage.getItem(PROG_KEY) || 'null');
+        if (stored && stored.blocks && stored.fetchedAt && (Date.now() - stored.fetchedAt < 86400000)) {
+          programCache = stored;
+          return stored;
+        }
+      } catch (e) {}
+      const cfg = await api('config');
+      programCache = { ...cfg, fetchedAt: Date.now() };
+      localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
+      return programCache;
+    }
+
+    // -------- Render --------
     async function render(view) {
       currentView = view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
@@ -441,25 +486,22 @@
       });
       const app = $('#app');
       app.innerHTML = '';
+      selectorOpen = false;
 
-      if (!getConfig().scriptUrl || !getConfig().token) {
-        return renderSetup(app);
-      }
+      if (!getConfig().scriptUrl || !getConfig().token) return renderSetup(app);
 
       if (view === 'home') await renderHome(app);
       else if (view === 'lift') await renderLift(app);
       else if (view === 'run') await renderRun(app);
-      else if (view === 'history') await renderHistory(app);
+      else if (view === 'pullups') await renderPullUps(app);
     }
 
     function renderSetup(app) {
       const cfg = getConfig();
-      app.appendChild(el('header', { class: 'top' }, [
-        el('h1', {}, 'Setup'),
-      ]));
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Setup')]));
       app.appendChild(el('div', { class: 'card' }, [
         el('p', { class: 'muted', style: 'margin-bottom: 16px; font-size: 14px;' },
-          'Paste your Apps Script web app URL and your secret token. You\'ll get both after running Deploy in the Apps Script editor.'),
+          "Paste your Apps Script web app URL and your secret token. You'll get both after running Deploy in the Apps Script editor."),
         el('div', { class: 'field' }, [
           el('label', {}, 'Apps Script /exec URL'),
           el('input', { id: 'cfgUrl', type: 'url', placeholder: 'https://script.google.com/macros/s/.../exec', value: cfg.scriptUrl || '' }),
@@ -473,13 +515,8 @@
           const token = $('#cfgToken').value.trim();
           if (!url || !token) return toast('Both fields required', true);
           setConfig({ scriptUrl: url, token });
-          try {
-            await api('ping');
-            toast('Connected');
-            render('home');
-          } catch (e) {
-            toast('Could not reach script: ' + e.message, true);
-          }
+          try { await api('ping'); toast('Connected'); render('home'); }
+          catch (e) { toast('Could not reach script: ' + e.message, true); }
         }}, 'Save & test'),
       ]));
     }
@@ -499,7 +536,6 @@
         todayCache = today;
         localStorage.setItem(CACHE_KEY, JSON.stringify({ today, savedAt: Date.now() }));
       } catch (e) {
-        // fall back to cache
         try {
           const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
           if (cached) { today = cached.today; toast('Offline — using cached plan'); }
@@ -508,20 +544,18 @@
           skel.remove();
           app.appendChild(el('div', { class: 'card' }, [
             el('h2', {}, 'Offline'),
-            el('p', { class: 'muted' }, 'Could not load today\'s plan. Logged entries will sync when you\'re back online.'),
+            el('p', { class: 'muted' }, "Could not load today's plan. Logged entries will sync when you're back online."),
           ]));
           return;
         }
       }
       skel.remove();
 
-      // Today summary card
       if (today.sessionType === 'lift' && today.template) {
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, `${today.block} · Week ${today.week} · Day ${today.liftDay}`),
+          el('h2', {}, `${today.blockName || ''} · Week ${today.programWeek} · Day ${today.liftDay}`),
           el('div', { class: 'big' }, dayTitle(today.liftDay)),
-          el('div', { class: 'muted', style: 'margin-top: 6px;' },
-            `${today.template.exercises.length} exercises`),
+          el('div', { class: 'muted', style: 'margin-top: 6px;' }, `${today.template.exercises.length} exercises`),
           el('button', { style: 'margin-top: 14px;', onclick: () => render('lift') }, 'Start lifting'),
         ]));
       } else if (today.sessionType === 'run') {
@@ -538,34 +572,37 @@
         ]));
       }
 
-      // Stats preview
       try {
         const stats = await api('stats');
         app.appendChild(el('div', { class: 'stat-grid' }, [
-          el('div', { class: 'card' }, [
-            el('h2', {}, 'Miles this week'),
-            el('div', { class: 'big' }, String(stats.runs.week)),
-          ]),
+          el('div', { class: 'card' }, [el('h2', {}, 'Miles this week'), el('div', { class: 'big' }, String(stats.runs.week))]),
           el('div', { class: 'card' }, [
             el('h2', {}, 'Miles YTD'),
             el('div', { class: 'big' }, String(stats.runs.year)),
             el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
           ]),
         ]));
+        const liftWk = stats.lifts ? stats.lifts.weekSessions : 0;
+        const puWk = stats.pullups ? stats.pullups.weekSessions : 0;
+        const puReps = stats.pullups ? stats.pullups.weekReps : 0;
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'This month'),
+          el('h2', {}, 'This week'),
           el('div', { class: 'spaced' }, [
             el('div', { class: 'col' }, [
               el('div', { class: 'big' }, String(stats.runs.month)),
-              el('div', { class: 'muted' }, 'miles run'),
+              el('div', { class: 'muted' }, 'miles run (month)'),
             ]),
             el('div', { class: 'col' }, [
-              el('div', { class: 'big' }, String(stats.lifts.weekSessions)),
-              el('div', { class: 'muted' }, 'lift sessions this week'),
+              el('div', { class: 'big' }, String(liftWk)),
+              el('div', { class: 'muted' }, 'lift sessions'),
+            ]),
+            el('div', { class: 'col' }, [
+              el('div', { class: 'big' }, String(puReps)),
+              el('div', { class: 'muted' }, `pull-ups (${puWk} sess)`),
             ]),
           ]),
         ]));
-      } catch (e) { /* skip stats on error */ }
+      } catch (e) {}
     }
 
     function dayTitle(d) {
@@ -581,139 +618,208 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 240px;' }));
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 80px;' }));
       app.appendChild(skel);
 
-      let today = todayCache;
-      if (!today) {
-        try { today = await api('today'); todayCache = today; }
-        catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline — come back online to fetch today\'s template.')); return; }
-      }
-
-      if (today.sessionType !== 'lift') {
+      // Load program config (cached) + today (for auto defaults)
+      let prog, today;
+      try {
+        [prog, today] = await Promise.all([loadProgram(), todayCache ? Promise.resolve(todayCache) : api('today')]);
+        todayCache = today;
+      } catch (e) {
         skel.remove();
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'Not a lift day'),
-          el('div', { class: 'big' }, today.sessionType === 'run' ? 'Run day' : 'Rest'),
-          el('div', { class: 'muted', style: 'margin-top: 8px;' }, 'Override and log anyway?'),
-          el('button', {
-            class: 'secondary',
-            style: 'margin-top: 12px;',
-            onclick: async () => {
-              // Manual day pick
-              const day = prompt('Which day template? A / B / C', 'A');
-              if (!day) return;
-              const week = Number(prompt('Which week? 1-5', '1')) || 1;
-              try {
-                const t = await api('template', { block: '', week, day: day.toUpperCase() });
-                renderLiftForm(app, { block: 'Block 1', week, liftDay: day.toUpperCase(), template: t });
-              } catch (e) { toast(e.message, true); }
-            },
-          }, 'Pick a template'),
-        ]));
+        app.appendChild(el('div', { class: 'card' }, 'Offline — need network to fetch program / template.'));
         return;
       }
-
       skel.remove();
-      renderLiftForm(app, today);
-    }
 
-    function renderLiftForm(app, today) {
-      const header = el('div', { class: 'card' }, [
-        el('h2', {}, `${today.block} · Week ${today.week} · Day ${today.liftDay}`),
-        el('div', { class: 'big' }, dayTitle(today.liftDay)),
-      ]);
-      app.appendChild(header);
+      // Initialize liftSelection from today's auto-detected slot if not set.
+      if (!liftSelection) {
+        const defaultDay = today.liftDay || 'A';
+        const defaultBlock = today.blockName || 'Block 1';
+        const defaultWeek = today.programWeek || 1;
+        liftSelection = { block: defaultBlock, week: defaultWeek, day: defaultDay };
+      }
 
-      const form = el('div', { id: 'liftForm' });
-      today.template.exercises.forEach((ex, idx) => {
-        const card = el('div', { class: 'exercise', 'data-idx': idx }, [
-          el('h3', {}, ex.name),
-          el('div', { class: 'meta' }, [
-            ex.category ? el('span', { class: 'pill ' + categoryClass(ex.category) }, ex.category) : null,
-            el('span', {}, `${ex.sets} sets · ${ex.targetReps}`),
+      // Selector card
+      const selectorCard = el('div', { class: 'card', id: 'selectorCard' });
+      app.appendChild(selectorCard);
+
+      // Exercises container
+      const exContainer = el('div', { id: 'exContainer' });
+      app.appendChild(exContainer);
+
+      function renderSelector() {
+        selectorCard.innerHTML = '';
+        selectorCard.appendChild(el('div', { class: 'selector-summary' }, [
+          el('div', {}, [
+            el('div', { class: 'label' }, 'Today\'s session'),
+            el('div', { class: 'value' }, `${liftSelection.block} · Week ${liftSelection.week} · Day ${liftSelection.day}`),
+            el('div', { class: 'muted' }, dayTitle(liftSelection.day)),
           ]),
-          ex.notes ? el('div', { class: 'notes' }, ex.notes) : null,
-          el('div', { class: 'field' }, [
-            el('label', {}, 'Weight'),
-            el('input', {
-              class: 'inp-weight',
-              type: 'text',
-              placeholder: 'e.g. 50 or BW',
-              value: ex.weight || '',
-              inputmode: 'text',
-            }),
-          ]),
-          (() => {
-            const grid = el('div', { class: 'set-grid' });
-            const labels = ['Set 1', 'Set 2', 'Set 3', 'Set 4'];
-            grid.appendChild(el('div', {
-              style: 'font-size: 10px; color: var(--muted); text-align: right; padding-right: 4px; align-self: center; font-weight: 600;',
-            }, 'REPS'));
-            labels.forEach((lab, i) => {
-              grid.appendChild(el('div', {}, [
-                el('div', { style: 'font-size: 10px; text-align: center; color: var(--muted); margin-bottom: 4px;' }, lab),
-                el('input', {
-                  class: 'inp-r' + (i + 1),
-                  type: 'number',
-                  inputmode: 'numeric',
-                  pattern: '[0-9]*',
-                  placeholder: '—',
-                  value: ex['r' + (i + 1)] === '' ? '' : String(ex['r' + (i + 1)] || ''),
-                }),
-              ]));
-            });
-            return grid;
-          })(),
-          ex.previous != null && ex.previous !== '' && ex.previous !== 0
-            ? el('div', { class: 'prev' }, [el('span', {}, 'Last week: '), el('b', {}, String(ex.previous))])
-            : null,
-        ]);
-        form.appendChild(card);
-      });
-      app.appendChild(form);
+          el('button', { class: 'edit', onclick: () => { selectorOpen = !selectorOpen; renderSelector(); } },
+            selectorOpen ? 'Done' : 'Change'),
+        ]));
 
-      app.appendChild(el('div', { class: 'field', style: 'margin-top: 16px;' }, [
-        el('label', {}, 'Session notes (optional)'),
-        el('input', { id: 'liftNotes', type: 'text', placeholder: 'how did it feel?' }),
-      ]));
+        if (selectorOpen) {
+          const body = el('div', { class: 'selector-body' });
 
-      app.appendChild(el('button', {
-        onclick: async () => {
-          const entries = [];
-          document.querySelectorAll('#liftForm .exercise').forEach((card, i) => {
-            const ex = today.template.exercises[i];
-            const weight = card.querySelector('.inp-weight').value.trim();
-            const r = [1, 2, 3, 4].map(n => {
-              const v = card.querySelector('.inp-r' + n).value.trim();
-              return v === '' ? '' : Number(v);
-            });
-            entries.push({
-              name: ex.name,
-              category: ex.category,
-              weight: weight,
-              r1: r[0], r2: r[1], r3: r[2], r4: r[3],
-              notes: '',
-            });
+          // Block row
+          body.appendChild(el('div', { class: 'pill-row-label' }, 'Block'));
+          const blockRow = el('div', { class: 'pill-row' });
+          prog.blocks.forEach(b => {
+            blockRow.appendChild(el('button', {
+              class: 'pill-btn' + (b.name === liftSelection.block ? ' active' : ''),
+              onclick: () => {
+                liftSelection.block = b.name;
+                // Snap week into the block's range if needed
+                if (liftSelection.week < b.startWeek || liftSelection.week > b.endWeek) {
+                  liftSelection.week = b.startWeek;
+                }
+                renderSelector();
+                fetchAndRenderExercises();
+              },
+            }, b.name));
           });
-          const meta = {
-            date: todayISO(),
-            block: today.block,
-            week: today.week,
-            day: today.liftDay,
-            notes: $('#liftNotes').value.trim(),
-          };
-          try {
-            await api('logLift', {}, { entries, meta });
-            toast('Saved to Lift Log');
-            setTimeout(() => render('home'), 800);
-          } catch (e) {
-            queuePush({ action: 'logLift', body: { entries, meta } });
-            toast('Saved offline — will sync later');
-            setTimeout(() => render('home'), 800);
+          body.appendChild(blockRow);
+
+          // Week row (constrained to current block)
+          const block = prog.blocks.find(b => b.name === liftSelection.block);
+          if (block) {
+            body.appendChild(el('div', { class: 'pill-row-label' }, 'Week'));
+            const weekRow = el('div', { class: 'pill-row' });
+            for (let w = block.startWeek; w <= block.endWeek; w++) {
+              weekRow.appendChild(el('button', {
+                class: 'pill-btn' + (w === liftSelection.week ? ' active' : ''),
+                onclick: () => { liftSelection.week = w; renderSelector(); fetchAndRenderExercises(); },
+              }, 'W' + w));
+            }
+            body.appendChild(weekRow);
           }
-        },
-      }, 'Save session'));
+
+          // Day row
+          body.appendChild(el('div', { class: 'pill-row-label' }, 'Day'));
+          const dayRow = el('div', { class: 'pill-row' });
+          ['A', 'B', 'C'].forEach(d => {
+            dayRow.appendChild(el('button', {
+              class: 'pill-btn' + (d === liftSelection.day ? ' active' : ''),
+              onclick: () => { liftSelection.day = d; renderSelector(); fetchAndRenderExercises(); },
+            }, `Day ${d} — ${dayTitle(d)}`));
+          });
+          body.appendChild(dayRow);
+
+          selectorCard.appendChild(body);
+        }
+      }
+
+      async function fetchAndRenderExercises() {
+        exContainer.innerHTML = '';
+        const loading = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+        exContainer.appendChild(loading);
+        let tpl;
+        try {
+          tpl = await api('template', { block: liftSelection.block, week: liftSelection.week, day: liftSelection.day });
+        } catch (e) {
+          loading.remove();
+          exContainer.appendChild(el('div', { class: 'card' }, 'Could not load template: ' + e.message));
+          return;
+        }
+        loading.remove();
+
+        if (!tpl.exercises.length) {
+          exContainer.appendChild(el('div', { class: 'card' }, 'No exercises for this slot.'));
+          return;
+        }
+
+        const form = el('div', { id: 'liftForm' });
+        tpl.exercises.forEach((ex, idx) => {
+          const card = el('div', { class: 'exercise', 'data-idx': idx }, [
+            el('h3', {}, ex.name),
+            el('div', { class: 'meta' }, [
+              ex.category ? el('span', { class: 'pill ' + categoryClass(ex.category) }, ex.category) : null,
+              el('span', {}, `${ex.sets} sets · ${ex.targetReps}`),
+            ]),
+            ex.notes ? el('div', { class: 'notes' }, ex.notes) : null,
+            el('div', { class: 'field' }, [
+              el('label', {}, 'Weight'),
+              el('input', { class: 'inp-weight', type: 'text', placeholder: 'e.g. 50 or BW', value: ex.weight || '', inputmode: 'text' }),
+            ]),
+            (() => {
+              const grid = el('div', { class: 'set-grid' });
+              grid.appendChild(el('div', {
+                style: 'font-size: 10px; color: var(--muted); text-align: right; padding-right: 4px; align-self: center; font-weight: 600;',
+              }, 'REPS'));
+              ['Set 1', 'Set 2', 'Set 3', 'Set 4'].forEach((lab, i) => {
+                grid.appendChild(el('div', {}, [
+                  el('div', { style: 'font-size: 10px; text-align: center; color: var(--muted); margin-bottom: 4px;' }, lab),
+                  el('input', {
+                    class: 'inp-r' + (i + 1),
+                    type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '—',
+                    value: ex['r' + (i + 1)] === '' ? '' : String(ex['r' + (i + 1)] || ''),
+                  }),
+                ]));
+              });
+              return grid;
+            })(),
+            el('div', { class: 'field', style: 'margin-top: 10px; margin-bottom: 0;' }, [
+              el('input', {
+                class: 'inp-notes', type: 'text',
+                placeholder: 'Per-exercise notes (optional)',
+                value: ex.sessionNotes || '',
+              }),
+            ]),
+            (ex.previous != null && ex.previous !== '' && ex.previous !== 0 && ex.previous !== '—')
+              ? el('div', { class: 'prev' }, [el('span', {}, 'Last week: '), el('b', {}, String(ex.previous))])
+              : null,
+          ]);
+          form.appendChild(card);
+        });
+        exContainer.appendChild(form);
+
+        exContainer.appendChild(el('div', { class: 'field', style: 'margin-top: 16px;' }, [
+          el('label', {}, 'Session notes (optional)'),
+          el('input', { id: 'liftSessionNotes', type: 'text', placeholder: 'how did it feel?' }),
+        ]));
+
+        exContainer.appendChild(el('button', {
+          onclick: async () => {
+            const entries = [];
+            form.querySelectorAll('.exercise').forEach((card, i) => {
+              const ex = tpl.exercises[i];
+              const weight = card.querySelector('.inp-weight').value.trim();
+              const r = [1, 2, 3, 4].map(n => {
+                const v = card.querySelector('.inp-r' + n).value.trim();
+                return v === '' ? '' : Number(v);
+              });
+              const notesInp = card.querySelector('.inp-notes');
+              entries.push({
+                name: ex.name, category: ex.category, weight,
+                r1: r[0], r2: r[1], r3: r[2], r4: r[3],
+                notes: notesInp ? notesInp.value.trim() : '',
+              });
+            });
+            const meta = {
+              date: todayISO(),
+              block: liftSelection.block,
+              week: liftSelection.week,
+              day: liftSelection.day,
+              notes: ($('#liftSessionNotes').value || '').trim(),
+            };
+            try {
+              await api('logLift', {}, { entries, meta });
+              toast('Saved to Lift Log');
+              setTimeout(() => render('home'), 800);
+            } catch (e) {
+              queuePush({ action: 'logLift', body: { entries, meta } });
+              toast('Saved offline — will sync later');
+              setTimeout(() => render('home'), 800);
+            }
+          },
+        }, 'Save session'));
+      }
+
+      renderSelector();
+      fetchAndRenderExercises();
     }
 
     async function renderRun(app) {
@@ -723,22 +829,10 @@
       ]));
 
       app.appendChild(el('div', { class: 'card' }, [
-        el('div', { class: 'field' }, [
-          el('label', {}, 'Date'),
-          el('input', { id: 'runDate', type: 'date', value: todayISO() }),
-        ]),
-        el('div', { class: 'field' }, [
-          el('label', {}, 'Distance (mi)'),
-          el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1' }),
-        ]),
-        el('div', { class: 'field' }, [
-          el('label', {}, 'Time (mm:ss or h:mm:ss)'),
-          el('input', { id: 'runTime', type: 'text', inputmode: 'numeric', placeholder: '32:15' }),
-        ]),
-        el('div', { class: 'field' }, [
-          el('label', {}, 'Notes (optional)'),
-          el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.' }),
-        ]),
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: todayISO() })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1' })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Time (mm:ss or h:mm:ss)'), el('input', { id: 'runTime', type: 'text', inputmode: 'numeric', placeholder: '32:15' })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.' })]),
         el('button', {
           onclick: async () => {
             const date = $('#runDate').value;
@@ -746,13 +840,8 @@
             const time = $('#runTime').value.trim();
             const notes = $('#runNotes').value.trim();
             if (!date || !distance || !time) return toast('Date, distance, and time required', true);
-
-            // Normalize time to the "MM:SS:00" convention the sheet uses.
             const parts = time.split(':').map(p => p.padStart(2, '0'));
-            let normalized;
-            if (parts.length === 2) normalized = parts[0] + ':' + parts[1] + ':00';
-            else normalized = parts.join(':');
-
+            const normalized = parts.length === 2 ? `${parts[0]}:${parts[1]}:00` : parts.join(':');
             try {
               const res = await api('logRun', {}, { run: { date, distance, time: normalized, notes } });
               toast('Logged · ' + res.pace + '/mi');
@@ -767,61 +856,124 @@
       ]));
     }
 
-    async function renderHistory(app) {
+    async function renderPullUps(app) {
       app.appendChild(el('header', { class: 'top' }, [
-        el('h1', {}, 'History'),
+        el('h1', {}, 'Pull-Ups'),
+        el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
-      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
-      app.appendChild(skel);
 
-      let data;
-      try { data = await api('recent', { limit: 20 }); }
-      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline.')); return; }
-      skel.remove();
-
-      if (data.runs && data.runs.length) {
-        const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent runs')]);
-        data.runs.forEach(r => {
-          list.appendChild(el('div', { class: 'history-item' }, [
-            el('div', {}, [
-              el('div', { class: 'name' }, `${r.distance} mi`),
-              el('div', { class: 'sub' }, `${r.pace || ''} · ${r.notes || 'no notes'}`),
-            ]),
-            el('div', { class: 'sub' }, r.date),
-          ]));
-        });
-        app.appendChild(list);
+      let prog, today;
+      try {
+        [prog, today] = await Promise.all([loadProgram(), todayCache ? Promise.resolve(todayCache) : api('today')]);
+        todayCache = today;
+      } catch (e) {
+        app.appendChild(el('div', { class: 'card' }, 'Offline — pull-up logging needs network for now.'));
+        return;
       }
 
-      if (data.lifts && data.lifts.length) {
-        const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent lifts')]);
-        data.lifts.forEach(s => {
-          list.appendChild(el('div', { class: 'history-item' }, [
-            el('div', {}, [
-              el('div', { class: 'name' }, `${dayTitle(s.day)} · ${s.exercises.length} exercises`),
-              el('div', { class: 'sub' }, `${s.block || ''} · Week ${s.week || ''}`),
-            ]),
-            el('div', { class: 'sub' }, s.date),
-          ]));
-        });
-        app.appendChild(list);
-      }
+      const week = today.programWeek || 1;
+      const phase = today.pullUpPhase || phaseForWeek(week);
+      const phaseInfo = prog.pullUpPhases.find(p => p.name === phase) || {};
 
-      if ((!data.runs || !data.runs.length) && (!data.lifts || !data.lifts.length)) {
-        app.appendChild(el('div', { class: 'card' }, 'No history yet.'));
-      }
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', {}, `Week ${week} · ${phase}`),
+        el('div', { class: 'muted', style: 'font-size: 14px;' },
+          `${phaseInfo.workingReps || ''} per set · ${phaseInfo.sets || 5} sets/day · ${phaseInfo.weight || ''}`),
+      ]));
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'puDate', type: 'date', value: todayISO() })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Program week (auto)'),
+          el('input', { id: 'puWeek', type: 'number', inputmode: 'numeric', min: '1', max: '12', value: String(week) }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Reps per set (5 sets)'),
+          (() => {
+            const grid = el('div', { class: 'set-grid-5' });
+            ['S1', 'S2', 'S3', 'S4', 'S5'].forEach((lab, i) => {
+              grid.appendChild(el('div', {}, [
+                el('div', { style: 'font-size: 10px; text-align: center; color: var(--muted); margin-bottom: 4px;' }, lab),
+                el('input', { class: 'inp-s' + (i + 1), type: 'number', inputmode: 'numeric', placeholder: '—' }),
+              ]));
+            });
+            return grid;
+          })(),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Weight (BW, BW+10, etc.)'),
+          el('input', { id: 'puWeight', type: 'text', value: phaseInfo.weight || 'BW' }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Notes (optional)'),
+          el('input', { id: 'puNotes', type: 'text', placeholder: 'felt strong / easy / spread across day' }),
+        ]),
+        el('button', {
+          onclick: async () => {
+            const date = $('#puDate').value;
+            const weekVal = Number($('#puWeek').value) || week;
+            const s = [1, 2, 3, 4, 5].map(n => {
+              const v = $('.inp-s' + n, app).value.trim();
+              return v === '' ? '' : Number(v);
+            });
+            const weight = $('#puWeight').value.trim();
+            const notes = $('#puNotes').value.trim();
+            if (s.every(v => v === '')) return toast('Enter at least one set', true);
+            const session = {
+              date, week: weekVal,
+              s1: s[0], s2: s[1], s3: s[2], s4: s[3], s5: s[4],
+              weight, notes,
+            };
+            try {
+              const res = await api('logPullUps', {}, { session });
+              toast(`Saved · ${res.total} total reps`);
+              setTimeout(() => render('home'), 900);
+            } catch (e) {
+              queuePush({ action: 'logPullUps', body: { session } });
+              toast('Saved offline — will sync later');
+              setTimeout(() => render('home'), 900);
+            }
+          },
+        }, 'Save pull-up session'),
+      ]));
+
+      // Recent pull-up sessions
+      try {
+        const recent = await api('recent', { limit: 5 });
+        if (recent.pullups && recent.pullups.length) {
+          const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent sessions')]);
+          recent.pullups.forEach(p => {
+            list.appendChild(el('div', {
+              style: 'padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;',
+            }, [
+              el('div', {}, [
+                el('div', { style: 'font-weight: 600;' }, `${p.total || 0} reps · ${p.weight || 'BW'}`),
+                el('div', { class: 'muted', style: 'font-size: 12px;' },
+                  `${[p.s1, p.s2, p.s3, p.s4, p.s5].filter(x => x !== '' && x != null).join('/')}`),
+              ]),
+              el('div', { class: 'muted', style: 'font-size: 13px;' }, `${p.date} · W${p.week}`),
+            ]));
+          });
+          app.appendChild(list);
+        }
+      } catch (e) {}
     }
 
-    // -------- Navigation --------
+    function phaseForWeek(w) {
+      if (w <= 3) return 'Phase 1';
+      if (w <= 6) return 'Phase 2';
+      if (w <= 9) return 'Phase 3';
+      return 'Phase 4';
+    }
+
+    // -------- Nav --------
     document.querySelectorAll('nav.bottom button').forEach(b => {
       b.addEventListener('click', () => render(b.dataset.view));
     });
 
     // -------- Init --------
     window.addEventListener('online', flushQueue);
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
     render('home');
     flushQueue();
   </script>
