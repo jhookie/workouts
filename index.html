@@ -332,9 +332,44 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 10px;
+      margin-bottom: 12px;
     }
     .stat-grid .card { margin: 0; }
     .stat-grid .big { font-size: 26px; }
+
+    /* Run time MM:SS split input */
+    .time-row {
+      display: grid;
+      grid-template-columns: 1fr 16px 1fr;
+      gap: 6px;
+      align-items: center;
+    }
+    .time-row input {
+      text-align: center;
+      font-size: 22px;
+      padding: 12px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .time-row .sep {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--muted);
+      padding-bottom: 2px;
+    }
+    .time-sub {
+      display: grid;
+      grid-template-columns: 1fr 16px 1fr;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .time-sub div {
+      font-size: 10px;
+      text-align: center;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
   </style>
 </head>
 <body>
@@ -551,13 +586,22 @@
       }
       skel.remove();
 
-      if (today.sessionType === 'lift' && today.template) {
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, `${today.blockName || ''} · Week ${today.programWeek} · Day ${today.liftDay}`),
+      if (today.sessionType === 'lift') {
+        const card = el('div', { class: 'card' }, [
+          el('h2', {}, `${today.blockName || 'Lift'} · Week ${today.programWeek || '?'} · Day ${today.liftDay || ''}`),
           el('div', { class: 'big' }, dayTitle(today.liftDay)),
-          el('div', { class: 'muted', style: 'margin-top: 6px;' }, `${today.template.exercises.length} exercises`),
-          el('button', { style: 'margin-top: 14px;', onclick: () => render('lift') }, 'Start lifting'),
-        ]));
+        ]);
+        if (today.template && today.template.exercises) {
+          card.appendChild(el('div', { class: 'muted', style: 'margin-top: 6px;' },
+            `${today.template.exercises.length} exercises`));
+        } else if (today.templateError) {
+          card.appendChild(el('div', { style: 'margin-top: 8px; font-size: 13px; color: var(--warn);' },
+            'Could not load template: ' + today.templateError));
+          card.appendChild(el('div', { class: 'muted', style: 'margin-top: 4px; font-size: 12px;' },
+            'Likely cause: BLOCKS tab names in Code.gs don\'t match your sheet exactly (en-dash vs hyphen).'));
+        }
+        card.appendChild(el('button', { style: 'margin-top: 14px;', onclick: () => render('lift') }, 'Start lifting'));
+        app.appendChild(card);
       } else if (today.sessionType === 'run') {
         app.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Today'),
@@ -586,12 +630,8 @@
         const puWk = stats.pullups ? stats.pullups.weekSessions : 0;
         const puReps = stats.pullups ? stats.pullups.weekReps : 0;
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'This week'),
+          el('h2', {}, 'This week (Mon–Sun)'),
           el('div', { class: 'spaced' }, [
-            el('div', { class: 'col' }, [
-              el('div', { class: 'big' }, String(stats.runs.month)),
-              el('div', { class: 'muted' }, 'miles run (month)'),
-            ]),
             el('div', { class: 'col' }, [
               el('div', { class: 'big' }, String(liftWk)),
               el('div', { class: 'muted' }, 'lift sessions'),
@@ -601,6 +641,11 @@
               el('div', { class: 'muted' }, `pull-ups (${puWk} sess)`),
             ]),
           ]),
+        ]));
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'This month'),
+          el('div', { class: 'big' }, String(stats.runs.month)),
+          el('div', { class: 'muted' }, 'miles run'),
         ]));
       } catch (e) {}
     }
@@ -831,17 +876,33 @@
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: todayISO() })]),
         el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1' })]),
-        el('div', { class: 'field' }, [el('label', {}, 'Time (mm:ss or h:mm:ss)'), el('input', { id: 'runTime', type: 'text', inputmode: 'numeric', placeholder: '32:15' })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Time'),
+          el('div', { class: 'time-row' }, [
+            el('input', { id: 'runMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+            el('div', { class: 'sep' }, ':'),
+            el('input', { id: 'runSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+          ]),
+          el('div', { class: 'time-sub' }, [
+            el('div', {}, 'min'),
+            el('div', {}, ''),
+            el('div', {}, 'sec'),
+          ]),
+        ]),
         el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.' })]),
         el('button', {
           onclick: async () => {
             const date = $('#runDate').value;
             const distance = Number($('#runDist').value);
-            const time = $('#runTime').value.trim();
+            const minRaw = $('#runMin').value.trim();
+            const secRaw = $('#runSec').value.trim();
             const notes = $('#runNotes').value.trim();
-            if (!date || !distance || !time) return toast('Date, distance, and time required', true);
-            const parts = time.split(':').map(p => p.padStart(2, '0'));
-            const normalized = parts.length === 2 ? `${parts[0]}:${parts[1]}:00` : parts.join(':');
+            if (!date || !distance || (minRaw === '' && secRaw === '')) {
+              return toast('Date, distance, and time required', true);
+            }
+            const mm = String(Number(minRaw) || 0).padStart(2, '0');
+            const ss = String(Number(secRaw) || 0).padStart(2, '0');
+            const normalized = `${mm}:${ss}:00`;
             try {
               const res = await api('logRun', {}, { run: { date, distance, time: normalized, notes } });
               toast('Logged · ' + res.pace + '/mi');
@@ -871,7 +932,7 @@
         return;
       }
 
-      const week = today.programWeek || 1;
+      const week = today.pullUpWeek || 1;
       const phase = today.pullUpPhase || phaseForWeek(week);
       const phaseInfo = prog.pullUpPhases.find(p => p.name === phase) || {};
 
