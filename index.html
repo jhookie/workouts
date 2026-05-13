@@ -851,13 +851,14 @@
               notes: ($('#liftSessionNotes').value || '').trim(),
             };
             try {
-              await api('logLift', {}, { entries, meta });
-              toast('Saved to Lift Log');
-              setTimeout(() => render('home'), 800);
+              const res = await api('logLift', {}, { entries, meta });
+              if (res.duplicate) toast('Already logged this session');
+              else toast('Saved to Lift Log');
+              setTimeout(() => render('home'), 900);
             } catch (e) {
               queuePush({ action: 'logLift', body: { entries, meta } });
               toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 800);
+              setTimeout(() => render('home'), 900);
             }
           },
         }, 'Save session'));
@@ -905,12 +906,13 @@
             const normalized = `${mm}:${ss}:00`;
             try {
               const res = await api('logRun', {}, { run: { date, distance, time: normalized, notes } });
-              toast('Logged · ' + res.pace + '/mi');
-              setTimeout(() => render('home'), 800);
+              if (res.duplicate) toast('Already logged — no duplicate added');
+              else toast('Logged · ' + res.pace + '/mi');
+              setTimeout(() => render('home'), 900);
             } catch (e) {
               queuePush({ action: 'logRun', body: { run: { date, distance, time: normalized, notes } } });
               toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 800);
+              setTimeout(() => render('home'), 900);
             }
           },
         }, 'Log run'),
@@ -987,7 +989,8 @@
             };
             try {
               const res = await api('logPullUps', {}, { session });
-              toast(`Saved · ${res.total} total reps`);
+              if (res.duplicate) toast('Already logged today');
+              else toast(`Saved · ${res.total} total reps`);
               setTimeout(() => render('home'), 900);
             } catch (e) {
               queuePush({ action: 'logPullUps', body: { session } });
