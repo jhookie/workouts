@@ -328,6 +328,125 @@
 
     .hidden { display: none !important; }
 
+    /* Greyed/disabled set input */
+    input.inp-disabled {
+      background: #0d0d0d;
+      color: #444;
+      border: 1px dashed #2a2a2a;
+      pointer-events: none;
+      background-image:
+        linear-gradient(135deg, transparent 46%, #2a2a2a 47%, #2a2a2a 53%, transparent 54%);
+    }
+
+    /* Workout picker modal */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.18s;
+      z-index: 150;
+    }
+    .modal-backdrop.show { opacity: 1; pointer-events: auto; }
+    .modal-sheet {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: var(--surface);
+      border-top-left-radius: 22px;
+      border-top-right-radius: 22px;
+      padding: 14px 16px calc(env(safe-area-inset-bottom) + 24px);
+      transform: translateY(100%);
+      transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 160;
+      border-top: 1px solid var(--border);
+    }
+    .modal-sheet.show { transform: translateY(0); }
+    .modal-grabber {
+      width: 40px; height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 0 auto 14px;
+    }
+    .modal-title {
+      font-size: 14px; font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 14px;
+      text-align: center;
+    }
+    .picker-options { display: flex; flex-direction: column; gap: 10px; }
+    .picker-option {
+      display: flex; align-items: center; gap: 14px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 14px 16px;
+      text-align: left;
+      width: 100%;
+      color: var(--text);
+      font-size: 16px;
+      border-radius: var(--radius);
+    }
+    .picker-option svg { width: 28px; height: 28px; color: var(--accent); flex-shrink: 0; }
+    .picker-label { font-size: 17px; font-weight: 600; }
+    .picker-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .picker-option > div { flex: 1; }
+
+    /* Analytics monthly bar chart */
+    .bar-row {
+      display: grid;
+      grid-template-columns: 36px 1fr 64px;
+      gap: 10px;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+    }
+    .bar-track {
+      background: var(--surface-2);
+      border-radius: 6px;
+      height: 14px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      background: var(--accent);
+      height: 100%;
+      border-radius: 6px;
+    }
+    .bar-row .label { color: var(--muted); font-weight: 600; }
+    .bar-row .val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+    .bar-row.zero .bar-fill { background: #2a2a2a; }
+    .bar-row.zero .val { color: var(--muted); }
+
+    /* Analytics best-efforts table */
+    .pr-row {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr 0.9fr;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      align-items: center;
+    }
+    .pr-row:last-child { border-bottom: none; }
+    .pr-row .bucket { font-weight: 600; }
+    .pr-row .time { font-variant-numeric: tabular-nums; }
+    .pr-row .pace { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .pr-row .date { color: var(--muted); font-size: 12px; text-align: right; }
+    .pr-header {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr 0.9fr;
+      gap: 8px;
+      padding-bottom: 8px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    .pr-header .date { text-align: right; }
+
     .stat-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -380,19 +499,43 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 20.5v-10z"/><path d="M9 21.5V13h6v8.5"/></svg>
       Home
     </button>
-    <button data-view="lift">
+    <button data-view="workout">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/></svg>
-      Lift
+      Workout
     </button>
-    <button data-view="run">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/></svg>
-      Run
+    <button data-view="analytics">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16V9M12 16v-4M16 16V7M20 19V5"/></svg>
+      Analytics
     </button>
-    <button data-view="pullups">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/></svg>
-      Pull-Ups
+    <button data-view="profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+      Profile
     </button>
   </nav>
+
+  <!-- Workout type picker (slides up from bottom when Workout tab tapped) -->
+  <div class="modal-backdrop" id="workoutPickerBackdrop"></div>
+  <div class="modal-sheet" id="workoutPicker">
+    <div class="modal-grabber"></div>
+    <h2 class="modal-title">Choose workout</h2>
+    <div class="picker-options">
+      <button class="picker-option" data-pick="lift">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/></svg>
+        <div class="picker-label">Lift</div>
+        <div class="picker-sub">Block sessions + extras</div>
+      </button>
+      <button class="picker-option" data-pick="run">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/></svg>
+        <div class="picker-label">Run</div>
+        <div class="picker-sub">Distance + time</div>
+      </button>
+      <button class="picker-option" data-pick="pullups">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/></svg>
+        <div class="picker-label">Pull-Ups</div>
+        <div class="picker-sub">GTG protocol</div>
+      </button>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
 
@@ -516,8 +659,10 @@
     // -------- Render --------
     async function render(view) {
       currentView = view;
+      // Active state on nav: lift/run/pullups all map to "workout" tab.
+      const navView = (view === 'lift' || view === 'run' || view === 'pullups') ? 'workout' : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
-        b.classList.toggle('active', b.dataset.view === view);
+        b.classList.toggle('active', b.dataset.view === navView);
       });
       const app = $('#app');
       app.innerHTML = '';
@@ -529,6 +674,17 @@
       else if (view === 'lift') await renderLift(app);
       else if (view === 'run') await renderRun(app);
       else if (view === 'pullups') await renderPullUps(app);
+      else if (view === 'analytics') await renderAnalytics(app);
+      else if (view === 'profile') await renderProfile(app);
+    }
+
+    function openWorkoutPicker() {
+      $('#workoutPickerBackdrop').classList.add('show');
+      $('#workoutPicker').classList.add('show');
+    }
+    function closeWorkoutPicker() {
+      $('#workoutPickerBackdrop').classList.remove('show');
+      $('#workoutPicker').classList.remove('show');
     }
 
     function renderSetup(app) {
@@ -794,14 +950,21 @@
               grid.appendChild(el('div', {
                 style: 'font-size: 10px; color: var(--muted); text-align: right; padding-right: 4px; align-self: center; font-weight: 600;',
               }, 'REPS'));
+              const prescribedSets = Math.min(4, Math.max(1, Number(ex.sets) || 4));
               ['Set 1', 'Set 2', 'Set 3', 'Set 4'].forEach((lab, i) => {
+                const isActive = (i + 1) <= prescribedSets;
+                const inpAttrs = {
+                  class: 'inp-r' + (i + 1) + (isActive ? '' : ' inp-disabled'),
+                  type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+                  placeholder: isActive ? '—' : '',
+                  value: isActive ? (ex['r' + (i + 1)] === '' ? '' : String(ex['r' + (i + 1)] || '')) : '',
+                };
+                if (!isActive) inpAttrs.disabled = 'disabled';
                 grid.appendChild(el('div', {}, [
-                  el('div', { style: 'font-size: 10px; text-align: center; color: var(--muted); margin-bottom: 4px;' }, lab),
-                  el('input', {
-                    class: 'inp-r' + (i + 1),
-                    type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '—',
-                    value: ex['r' + (i + 1)] === '' ? '' : String(ex['r' + (i + 1)] || ''),
-                  }),
+                  el('div', {
+                    style: 'font-size: 10px; text-align: center; color: ' + (isActive ? 'var(--muted)' : '#3a3a3a') + '; margin-bottom: 4px;',
+                  }, lab),
+                  el('input', inpAttrs),
                 ]));
               });
               return grid;
@@ -813,9 +976,7 @@
                 value: ex.sessionNotes || '',
               }),
             ]),
-            (ex.previous != null && ex.previous !== '' && ex.previous !== 0 && ex.previous !== '—')
-              ? el('div', { class: 'prev' }, [el('span', {}, 'Last week: '), el('b', {}, String(ex.previous))])
-              : null,
+            renderLastWeek_(ex),
           ]);
           form.appendChild(card);
         });
@@ -1030,10 +1191,160 @@
       return 'Phase 4';
     }
 
+    function renderLastWeek_(ex) {
+      // Compact "Last week" footer showing prior week's weight × total reps.
+      const w = ex.prevWeight;
+      const t = ex.prevTotal != null ? ex.prevTotal : ex.previous;
+      const hasW = (w != null && w !== '' && w !== '—');
+      const hasT = (t != null && t !== '' && t !== '—' && t !== 0 && t !== '0');
+      if (!hasW && !hasT) return null;
+      const parts = [];
+      if (hasW) parts.push(String(w) + (typeof w === 'number' ? ' lb' : ''));
+      if (hasT) parts.push(String(t) + ' reps');
+      return el('div', { class: 'prev' }, [
+        el('span', {}, 'Last week: '),
+        el('b', {}, parts.join(' · ')),
+      ]);
+    }
+
+    async function renderAnalytics(app) {
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Analytics'),
+        el('span', { class: 'date' }, new Date().getFullYear() + ' running'),
+      ]));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
+      app.appendChild(skel);
+
+      let data;
+      try { data = await api('analytics'); }
+      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline — analytics needs network.')); return; }
+      skel.remove();
+
+      // YTD summary grid
+      app.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total miles YTD'),
+          el('div', { class: 'big' }, String(data.year.miles)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${data.year.runs} runs`),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Avg pace'),
+          el('div', { class: 'big' }, data.year.avgPace || '—'),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, '/mi'),
+        ]),
+      ]));
+      app.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Avg distance'),
+          el('div', { class: 'big' }, String(data.year.avgDistance)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'mi/run'),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Avg run time'),
+          el('div', { class: 'big' }, String(data.year.avgTimeMinutes)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'min'),
+        ]),
+      ]));
+
+      // Monthly mileage chart
+      const maxMi = Math.max(1, ...data.monthly.map(m => m.miles));
+      const monthlyCard = el('div', { class: 'card' }, [
+        el('h2', {}, 'Monthly mileage'),
+      ]);
+      data.monthly.forEach(m => {
+        const pct = (m.miles / maxMi) * 100;
+        monthlyCard.appendChild(el('div', { class: 'bar-row' + (m.miles === 0 ? ' zero' : '') }, [
+          el('div', { class: 'label' }, m.label),
+          el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+          el('div', { class: 'val' }, m.miles ? String(m.miles) + ' mi' : '—'),
+        ]));
+      });
+      app.appendChild(monthlyCard);
+
+      // Best efforts
+      if (data.bestEfforts && data.bestEfforts.length) {
+        const peCard = el('div', { class: 'card' }, [
+          el('h2', {}, 'Best efforts'),
+          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: -8px; margin-bottom: 10px;' },
+            'Fastest pace at each distance bucket. Without GPS splits, these reflect your best run at ~that distance — not in-run segment PRs.'),
+          el('div', { class: 'pr-header' }, [
+            el('div', {}, 'Distance'),
+            el('div', {}, 'Time'),
+            el('div', { class: 'pace' }, 'Pace'),
+            el('div', { class: 'date' }, 'Date'),
+          ]),
+        ]);
+        data.bestEfforts.forEach(pr => {
+          peCard.appendChild(el('div', { class: 'pr-row' }, [
+            el('div', { class: 'bucket' }, pr.bucket),
+            el('div', { class: 'time' }, prettyTime_(pr.time)),
+            el('div', { class: 'pace' }, pr.pace + '/mi'),
+            el('div', { class: 'date' }, pr.date),
+          ]));
+        });
+        app.appendChild(peCard);
+      }
+
+      // Year over year
+      if (data.yearly && data.yearly.length > 1) {
+        const yoyCard = el('div', { class: 'card' }, [el('h2', {}, 'Year over year')]);
+        const maxY = Math.max(1, ...data.yearly.map(y => y.miles));
+        data.yearly.forEach(y => {
+          const pct = (y.miles / maxY) * 100;
+          yoyCard.appendChild(el('div', { class: 'bar-row' }, [
+            el('div', { class: 'label' }, y.year),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, String(y.miles) + ' mi'),
+          ]));
+        });
+        app.appendChild(yoyCard);
+      }
+    }
+
+    function prettyTime_(s) {
+      // Convert "43:29:00" → "43:29" (drop the trailing :00 if zero).
+      if (!s) return '';
+      const m = String(s).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+      if (m && m[3] === '00') return `${m[1]}:${m[2]}`;
+      return String(s);
+    }
+
+    async function renderProfile(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Profile')]));
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', {}, 'Coming next iteration'),
+        el('div', { style: 'margin-top: 8px; font-size: 14px; line-height: 1.5;' },
+          'Will include:'),
+        el('ul', { style: 'margin: 10px 0 0 20px; font-size: 14px; line-height: 1.7; color: var(--muted);' }, [
+          el('li', {}, 'Body weight + height'),
+          el('li', {}, 'Shoe tracker (auto miles since start date)'),
+          el('li', {}, 'Best-effort PR badges'),
+        ]),
+      ]));
+    }
+
     // -------- Nav --------
     document.querySelectorAll('nav.bottom button').forEach(b => {
-      b.addEventListener('click', () => render(b.dataset.view));
+      b.addEventListener('click', () => {
+        if (b.dataset.view === 'workout') {
+          openWorkoutPicker();
+        } else {
+          closeWorkoutPicker();
+          render(b.dataset.view);
+        }
+      });
     });
+
+    // Workout picker
+    document.querySelectorAll('.picker-option').forEach(p => {
+      p.addEventListener('click', () => {
+        const pick = p.dataset.pick;
+        closeWorkoutPicker();
+        render(pick);
+      });
+    });
+    $('#workoutPickerBackdrop').addEventListener('click', closeWorkoutPicker);
 
     // -------- Init --------
     window.addEventListener('online', flushQueue);
