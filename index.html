@@ -338,6 +338,176 @@
         linear-gradient(135deg, transparent 46%, #2a2a2a 47%, #2a2a2a 53%, transparent 54%);
     }
 
+    /* Home action grid */
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .action-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      width: 100%;
+    }
+    .action-tile svg { width: 28px; height: 28px; color: var(--accent); }
+    .action-tile.today { border-color: var(--accent); }
+    .action-tile.today::after {
+      content: 'TODAY';
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    /* Year filter segmented */
+    .seg {
+      display: flex;
+      gap: 6px;
+      background: var(--surface);
+      padding: 4px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .seg button {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      width: auto;
+      flex-shrink: 0;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .seg button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    /* Calendar */
+    .cal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .cal-header h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); text-transform: none; margin: 0; }
+    .cal-nav-btn {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      width: 36px; height: 36px;
+      padding: 0;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .cal-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 8px;
+      border-radius: var(--radius-lg);
+    }
+    .cal-dow {
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 4px 0;
+    }
+    .cal-day {
+      aspect-ratio: 1 / 1;
+      background: var(--surface-2);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 4px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: stretch;
+      cursor: pointer;
+      width: 100%;
+    }
+    .cal-day.empty { background: transparent; pointer-events: none; }
+    .cal-day.today { border-color: var(--accent); color: var(--accent); }
+    .cal-day.has-activity { background: #1a1a1a; }
+    .cal-day.selected { border-color: var(--accent); background: #2a1a10; }
+    .cal-num { text-align: left; line-height: 1; }
+    .cal-dots {
+      display: flex;
+      gap: 3px;
+      justify-content: flex-end;
+    }
+    .cal-dot { width: 5px; height: 5px; border-radius: 50%; }
+    .cal-dot.lift { background: #ff6b35; }
+    .cal-dot.run  { background: #7ab7ff; }
+    .cal-dot.pull { background: #7affb7; }
+
+    .cal-detail {
+      margin-top: 12px;
+    }
+
+    /* Profile - PR badges */
+    .pr-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .pr-badge {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    .pr-badge .b-name { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; margin-bottom: 6px; }
+    .pr-badge .b-pace { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .pr-badge .b-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* Profile - Shoes */
+    .shoe-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-bottom: 8px;
+    }
+    .shoe-name { font-weight: 600; font-size: 15px; }
+    .shoe-brand { font-size: 12px; color: var(--muted); }
+    .shoe-miles-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; }
+    .shoe-miles { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .shoe-miles.warn  { color: var(--warn); }
+    .shoe-miles.danger { color: var(--danger); }
+    .shoe-bar {
+      height: 6px; background: #0d0d0d; border-radius: 3px; overflow: hidden;
+      margin-top: 8px;
+    }
+    .shoe-bar-fill { height: 100%; background: var(--success); border-radius: 3px; }
+    .shoe-bar-fill.warn  { background: var(--warn); }
+    .shoe-bar-fill.danger { background: var(--danger); }
+
     /* Workout picker modal */
     .modal-backdrop {
       position: fixed; inset: 0;
@@ -499,9 +669,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 20.5v-10z"/><path d="M9 21.5V13h6v8.5"/></svg>
       Home
     </button>
-    <button data-view="workout">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/></svg>
-      Workout
+    <button data-view="calendar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>
+      Calendar
     </button>
     <button data-view="analytics">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16V9M12 16v-4M16 16V7M20 19V5"/></svg>
@@ -512,30 +682,6 @@
       Profile
     </button>
   </nav>
-
-  <!-- Workout type picker (slides up from bottom when Workout tab tapped) -->
-  <div class="modal-backdrop" id="workoutPickerBackdrop"></div>
-  <div class="modal-sheet" id="workoutPicker">
-    <div class="modal-grabber"></div>
-    <h2 class="modal-title">Choose workout</h2>
-    <div class="picker-options">
-      <button class="picker-option" data-pick="lift">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/></svg>
-        <div class="picker-label">Lift</div>
-        <div class="picker-sub">Block sessions + extras</div>
-      </button>
-      <button class="picker-option" data-pick="run">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/></svg>
-        <div class="picker-label">Run</div>
-        <div class="picker-sub">Distance + time</div>
-      </button>
-      <button class="picker-option" data-pick="pullups">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/></svg>
-        <div class="picker-label">Pull-Ups</div>
-        <div class="picker-sub">GTG protocol</div>
-      </button>
-    </div>
-  </div>
 
   <div class="toast" id="toast"></div>
 
@@ -659,8 +805,8 @@
     // -------- Render --------
     async function render(view) {
       currentView = view;
-      // Active state on nav: lift/run/pullups all map to "workout" tab.
-      const navView = (view === 'lift' || view === 'run' || view === 'pullups') ? 'workout' : view;
+      // lift/run/pullups don't have a top-level nav anymore — they highlight Home.
+      const navView = (view === 'lift' || view === 'run' || view === 'pullups') ? 'home' : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
       });
@@ -674,17 +820,9 @@
       else if (view === 'lift') await renderLift(app);
       else if (view === 'run') await renderRun(app);
       else if (view === 'pullups') await renderPullUps(app);
+      else if (view === 'calendar') await renderCalendar(app);
       else if (view === 'analytics') await renderAnalytics(app);
       else if (view === 'profile') await renderProfile(app);
-    }
-
-    function openWorkoutPicker() {
-      $('#workoutPickerBackdrop').classList.add('show');
-      $('#workoutPicker').classList.add('show');
-    }
-    function closeWorkoutPicker() {
-      $('#workoutPickerBackdrop').classList.remove('show');
-      $('#workoutPicker').classList.remove('show');
     }
 
     function renderSetup(app) {
@@ -742,33 +880,33 @@
       }
       skel.remove();
 
-      if (today.sessionType === 'lift') {
-        const card = el('div', { class: 'card' }, [
-          el('h2', {}, `${today.blockName || 'Lift'} · Week ${today.programWeek || '?'} · Day ${today.liftDay || ''}`),
-          el('div', { class: 'big' }, dayTitle(today.liftDay)),
-        ]);
-        if (today.template && today.template.exercises) {
-          card.appendChild(el('div', { class: 'muted', style: 'margin-top: 6px;' },
-            `${today.template.exercises.length} exercises`));
-        } else if (today.templateError) {
-          card.appendChild(el('div', { style: 'margin-top: 8px; font-size: 13px; color: var(--warn);' },
-            'Could not load template: ' + today.templateError));
-          card.appendChild(el('div', { class: 'muted', style: 'margin-top: 4px; font-size: 12px;' },
-            'Likely cause: BLOCKS tab names in Code.gs don\'t match your sheet exactly (en-dash vs hyphen).'));
-        }
-        card.appendChild(el('button', { style: 'margin-top: 14px;', onclick: () => render('lift') }, 'Start lifting'));
-        app.appendChild(card);
+      // 3-way action grid: Lift / Run / Pull-Ups. Highlights today's scheduled type.
+      const todayKind = today.sessionType === 'lift' ? 'lift'
+                     : today.sessionType === 'run' ? 'run' : null;
+      const grid = el('div', { class: 'action-grid' }, [
+        actionTile_('lift', 'Lift', todayKind === 'lift'),
+        actionTile_('run', 'Run', todayKind === 'run'),
+        actionTile_('pullups', 'Pull-Ups', false),
+      ]);
+      app.appendChild(grid);
+
+      // Subtle today label
+      if (today.sessionType === 'lift' && today.blockName) {
+        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
+          `${today.blockName} · Week ${today.programWeek} · Day ${today.liftDay} — ${dayTitle(today.liftDay)}`));
       } else if (today.sessionType === 'run') {
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'Today'),
-          el('div', { class: 'big' }, 'Run day'),
-          el('div', { class: 'muted', style: 'margin-top: 6px;' }, 'Goal: 10–15 mi/week'),
-          el('button', { style: 'margin-top: 14px;', onclick: () => render('run') }, 'Log a run'),
-        ]));
-      } else {
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'Today'),
-          el('div', { class: 'big' }, 'Rest day'),
+        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
+          'Today: run day · goal 10–15 mi/week'));
+      } else if (today.sessionType === 'rest') {
+        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
+          'Today: rest'));
+      }
+      if (today.templateError) {
+        app.appendChild(el('div', { class: 'card', style: 'border-color: var(--warn);' }, [
+          el('div', { style: 'font-size: 13px; color: var(--warn);' },
+            'Could not load lift template: ' + today.templateError),
+          el('div', { class: 'muted', style: 'margin-top: 4px; font-size: 12px;' },
+            'Likely cause: BLOCKS tab names in Code.gs don\'t match your sheet (en-dash vs hyphen).'),
         ]));
       }
 
@@ -785,17 +923,16 @@
         const liftWk = stats.lifts ? stats.lifts.weekSessions : 0;
         const puWk = stats.pullups ? stats.pullups.weekSessions : 0;
         const puReps = stats.pullups ? stats.pullups.weekReps : 0;
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'This week (Mon–Sun)'),
-          el('div', { class: 'spaced' }, [
-            el('div', { class: 'col' }, [
-              el('div', { class: 'big' }, String(liftWk)),
-              el('div', { class: 'muted' }, 'lift sessions'),
-            ]),
-            el('div', { class: 'col' }, [
-              el('div', { class: 'big' }, String(puReps)),
-              el('div', { class: 'muted' }, `pull-ups (${puWk} sess)`),
-            ]),
+        app.appendChild(el('div', { class: 'stat-grid' }, [
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Lift sessions'),
+            el('div', { class: 'big' }, String(liftWk)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'Mon–Sun'),
+          ]),
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Pull-Up sessions'),
+            el('div', { class: 'big' }, String(puWk)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${puReps} reps · Mon–Sun`),
           ]),
         ]));
         app.appendChild(el('div', { class: 'card' }, [
@@ -811,6 +948,19 @@
       if (d === 'B') return 'Pull Day';
       if (d === 'C') return 'Full Upper';
       return 'Lift';
+    }
+
+    function actionTile_(view, label, isToday) {
+      const icons = {
+        lift: '<path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/>',
+        run: '<circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/>',
+        pullups: '<path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/>',
+      };
+      return el('button', {
+        class: 'action-tile' + (isToday ? ' today' : ''),
+        onclick: () => render(view),
+        html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[view]}</svg><span>${label}</span>`,
+      });
     }
 
     async function renderLift(app) {
@@ -1035,6 +1185,13 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
+      // Pre-fetch shoes for the dropdown (best-effort; if offline, dropdown is empty)
+      let shoes = [];
+      try { const r = await api('shoes'); shoes = (r.shoes || []).filter(s => s.active); } catch (e) {}
+
+      const shoeOptions = [el('option', { value: '' }, '— Select shoe —')]
+        .concat(shoes.map(s => el('option', { value: s.name }, `${s.name} (${s.totalMiles} mi)`)));
+
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: todayISO() })]),
         el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1' })]),
@@ -1051,6 +1208,10 @@
             el('div', {}, 'sec'),
           ]),
         ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Shoe'),
+          el('select', { id: 'runShoe' }, shoeOptions),
+        ]),
         el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.' })]),
         el('button', {
           onclick: async () => {
@@ -1059,19 +1220,21 @@
             const minRaw = $('#runMin').value.trim();
             const secRaw = $('#runSec').value.trim();
             const notes = $('#runNotes').value.trim();
+            const shoe = $('#runShoe').value;
             if (!date || !distance || (minRaw === '' && secRaw === '')) {
               return toast('Date, distance, and time required', true);
             }
             const mm = String(Number(minRaw) || 0).padStart(2, '0');
             const ss = String(Number(secRaw) || 0).padStart(2, '0');
             const normalized = `${mm}:${ss}:00`;
+            const payload = { run: { date, distance, time: normalized, notes, shoe } };
             try {
-              const res = await api('logRun', {}, { run: { date, distance, time: normalized, notes } });
+              const res = await api('logRun', {}, payload);
               if (res.duplicate) toast('Already logged — no duplicate added');
               else toast('Logged · ' + res.pace + '/mi');
               setTimeout(() => render('home'), 900);
             } catch (e) {
-              queuePush({ action: 'logRun', body: { run: { date, distance, time: normalized, notes } } });
+              queuePush({ action: 'logRun', body: payload });
               toast('Saved offline — will sync later');
               setTimeout(() => render('home'), 900);
             }
@@ -1207,99 +1370,219 @@
       ]);
     }
 
+    let analyticsYearFilter = null; // persists across re-renders
+
     async function renderAnalytics(app) {
-      app.appendChild(el('header', { class: 'top' }, [
-        el('h1', {}, 'Analytics'),
-        el('span', { class: 'date' }, new Date().getFullYear() + ' running'),
-      ]));
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Analytics')]));
 
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
       app.appendChild(skel);
 
       let data;
-      try { data = await api('analytics'); }
-      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline — analytics needs network.')); return; }
+      try {
+        const filter = analyticsYearFilter || String(new Date().getFullYear());
+        data = await api('analytics', { year: filter });
+        analyticsYearFilter = data.filter;
+      } catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Offline — analytics needs network.'));
+        return;
+      }
       skel.remove();
 
-      // YTD summary grid
+      // Year filter segmented control
+      const seg = el('div', { class: 'seg' });
+      const years = (data.availableYears || []).slice();
+      const thisYr = new Date().getFullYear();
+      if (!years.includes(thisYr)) years.unshift(thisYr);
+      years.sort((a, b) => b - a);
+      const options = years.map(String).concat(['all']);
+      options.forEach(opt => {
+        const isActive = String(data.filter) === opt;
+        seg.appendChild(el('button', {
+          class: isActive ? 'active' : '',
+          onclick: async () => {
+            analyticsYearFilter = opt;
+            render('analytics');
+          },
+        }, opt === 'all' ? 'All Time' : opt));
+      });
+      app.appendChild(seg);
+
+      // Summary stat grid
+      const s = data.summary;
       app.appendChild(el('div', { class: 'stat-grid' }, [
         el('div', { class: 'card' }, [
-          el('h2', {}, 'Total miles YTD'),
-          el('div', { class: 'big' }, String(data.year.miles)),
-          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${data.year.runs} runs`),
+          el('h2', {}, 'Total miles'),
+          el('div', { class: 'big' }, String(s.miles)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.runs} runs`),
         ]),
         el('div', { class: 'card' }, [
           el('h2', {}, 'Avg pace'),
-          el('div', { class: 'big' }, data.year.avgPace || '—'),
+          el('div', { class: 'big' }, s.avgPace || '—'),
           el('div', { class: 'muted', style: 'margin-top: 4px;' }, '/mi'),
         ]),
       ]));
       app.appendChild(el('div', { class: 'stat-grid' }, [
         el('div', { class: 'card' }, [
           el('h2', {}, 'Avg distance'),
-          el('div', { class: 'big' }, String(data.year.avgDistance)),
+          el('div', { class: 'big' }, String(s.avgDistance)),
           el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'mi/run'),
         ]),
         el('div', { class: 'card' }, [
           el('h2', {}, 'Avg run time'),
-          el('div', { class: 'big' }, String(data.year.avgTimeMinutes)),
+          el('div', { class: 'big' }, String(s.avgTimeMinutes)),
           el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'min'),
         ]),
       ]));
 
-      // Monthly mileage chart
-      const maxMi = Math.max(1, ...data.monthly.map(m => m.miles));
-      const monthlyCard = el('div', { class: 'card' }, [
-        el('h2', {}, 'Monthly mileage'),
-      ]);
-      data.monthly.forEach(m => {
-        const pct = (m.miles / maxMi) * 100;
-        monthlyCard.appendChild(el('div', { class: 'bar-row' + (m.miles === 0 ? ' zero' : '') }, [
-          el('div', { class: 'label' }, m.label),
-          el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
-          el('div', { class: 'val' }, m.miles ? String(m.miles) + ' mi' : '—'),
-        ]));
-      });
-      app.appendChild(monthlyCard);
-
-      // Best efforts
-      if (data.bestEfforts && data.bestEfforts.length) {
-        const peCard = el('div', { class: 'card' }, [
-          el('h2', {}, 'Best efforts'),
-          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: -8px; margin-bottom: 10px;' },
-            'Fastest pace at each distance bucket. Without GPS splits, these reflect your best run at ~that distance — not in-run segment PRs.'),
-          el('div', { class: 'pr-header' }, [
-            el('div', {}, 'Distance'),
-            el('div', {}, 'Time'),
-            el('div', { class: 'pace' }, 'Pace'),
-            el('div', { class: 'date' }, 'Date'),
-          ]),
-        ]);
-        data.bestEfforts.forEach(pr => {
-          peCard.appendChild(el('div', { class: 'pr-row' }, [
-            el('div', { class: 'bucket' }, pr.bucket),
-            el('div', { class: 'time' }, prettyTime_(pr.time)),
-            el('div', { class: 'pace' }, pr.pace + '/mi'),
-            el('div', { class: 'date' }, pr.date),
+      // Monthly mileage (only for specific years)
+      if (data.monthly && data.monthly.length) {
+        const maxMi = Math.max(1, ...data.monthly.map(m => m.miles));
+        const monthlyCard = el('div', { class: 'card' }, [el('h2', {}, 'Monthly mileage')]);
+        data.monthly.forEach(m => {
+          const pct = (m.miles / maxMi) * 100;
+          const meta = m.runs ? `${m.avgDistance} mi/run · ${m.avgPace}/mi` : 'no runs';
+          monthlyCard.appendChild(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
+            el('div', { class: 'bar-row' + (m.miles === 0 ? ' zero' : '') }, [
+              el('div', { class: 'label' }, m.label),
+              el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+              el('div', { class: 'val' }, m.miles ? String(m.miles) + ' mi' : '—'),
+            ]),
+            el('div', { style: 'font-size: 11px; color: var(--muted); margin-left: 46px; margin-top: 2px;' }, meta),
           ]));
         });
-        app.appendChild(peCard);
+        app.appendChild(monthlyCard);
       }
 
-      // Year over year
+      // Year over year (always shown, especially useful for All Time)
       if (data.yearly && data.yearly.length > 1) {
         const yoyCard = el('div', { class: 'card' }, [el('h2', {}, 'Year over year')]);
         const maxY = Math.max(1, ...data.yearly.map(y => y.miles));
         data.yearly.forEach(y => {
           const pct = (y.miles / maxY) * 100;
-          yoyCard.appendChild(el('div', { class: 'bar-row' }, [
+          yoyCard.appendChild(el('div', { class: 'bar-row' + (y.miles === 0 ? ' zero' : '') }, [
             el('div', { class: 'label' }, y.year),
             el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
-            el('div', { class: 'val' }, String(y.miles) + ' mi'),
+            el('div', { class: 'val' }, y.miles ? String(y.miles) + ' mi' : '—'),
           ]));
         });
         app.appendChild(yoyCard);
       }
+    }
+
+    let calendarMonth = null; // { year, month }
+
+    async function renderCalendar(app) {
+      if (!calendarMonth) {
+        const n = new Date();
+        calendarMonth = { year: n.getFullYear(), month: n.getMonth() + 1 };
+      }
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Calendar')]));
+
+      const headerRow = el('div', { class: 'cal-header' }, [
+        el('button', { class: 'cal-nav-btn', onclick: () => {
+          if (calendarMonth.month === 1) { calendarMonth.year--; calendarMonth.month = 12; }
+          else calendarMonth.month--;
+          render('calendar');
+        }}, '‹'),
+        el('h2', { id: 'calMonthLabel' }, 'Loading…'),
+        el('button', { class: 'cal-nav-btn', onclick: () => {
+          if (calendarMonth.month === 12) { calendarMonth.year++; calendarMonth.month = 1; }
+          else calendarMonth.month++;
+          render('calendar');
+        }}, '›'),
+      ]);
+      app.appendChild(headerRow);
+
+      const gridContainer = el('div', { id: 'calGrid' }, el('div', { class: 'skeleton', style: 'height: 280px;' }));
+      app.appendChild(gridContainer);
+
+      let data;
+      try { data = await api('month', { year: calendarMonth.year, month: calendarMonth.month }); }
+      catch (e) { gridContainer.innerHTML = ''; gridContainer.appendChild(el('div', { class: 'card' }, 'Offline — calendar needs network.')); return; }
+
+      $('#calMonthLabel').textContent = data.monthLabel;
+
+      const grid = el('div', { class: 'cal-grid' });
+      ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => grid.appendChild(el('div', { class: 'cal-dow' }, d)));
+      for (let i = 0; i < data.firstDayOfWeek; i++) grid.appendChild(el('div', { class: 'cal-day empty' }));
+      const todayISOStr = todayISO();
+      data.days.forEach(day => {
+        const hasLift = !!day.lift;
+        const hasRun = !!day.run;
+        const hasPull = !!day.pullups;
+        const hasAny = hasLift || hasRun || hasPull;
+        const isToday = day.date === todayISOStr;
+        const cls = 'cal-day' + (hasAny ? ' has-activity' : '') + (isToday ? ' today' : '');
+        const dots = [];
+        if (hasLift) dots.push(el('div', { class: 'cal-dot lift' }));
+        if (hasRun) dots.push(el('div', { class: 'cal-dot run' }));
+        if (hasPull) dots.push(el('div', { class: 'cal-dot pull' }));
+        grid.appendChild(el('button', {
+          class: cls,
+          'data-date': day.date,
+          onclick: () => { selectCalendarDay(day); },
+        }, [
+          el('div', { class: 'cal-num' }, String(day.day)),
+          el('div', { class: 'cal-dots' }, dots),
+        ]));
+      });
+      gridContainer.innerHTML = '';
+      gridContainer.appendChild(grid);
+
+      // Detail panel
+      gridContainer.appendChild(el('div', { id: 'calDetail', class: 'cal-detail' }));
+
+      // Legend
+      gridContainer.appendChild(el('div', { class: 'card', style: 'margin-top: 12px; font-size: 12px; padding: 10px 14px;' }, [
+        el('div', { style: 'display: flex; gap: 16px; flex-wrap: wrap;' }, [
+          el('span', {}, [el('span', { class: 'cal-dot lift', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Lift']),
+          el('span', {}, [el('span', { class: 'cal-dot run', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Run']),
+          el('span', {}, [el('span', { class: 'cal-dot pull', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Pull-Ups']),
+        ]),
+      ]));
+    }
+
+    function selectCalendarDay(day) {
+      document.querySelectorAll('.cal-day.selected').forEach(n => n.classList.remove('selected'));
+      const btn = document.querySelector(`.cal-day[data-date="${day.date}"]`);
+      if (btn) btn.classList.add('selected');
+
+      const detail = $('#calDetail');
+      detail.innerHTML = '';
+      const card = el('div', { class: 'card' }, [
+        el('h2', {}, day.weekday + ' · ' + day.date),
+      ]);
+      const items = [];
+      if (day.lift) {
+        const liftDesc = `${day.lift.block || ''} · Week ${day.lift.week || ''} · Day ${day.lift.day || ''}`.trim();
+        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
+          el('div', { style: 'font-weight: 600; color: #ff9b7a;' }, 'Lift'),
+          el('div', { class: 'muted', style: 'font-size: 13px;' }, liftDesc),
+        ]));
+      }
+      if (day.run) {
+        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
+          el('div', { style: 'font-weight: 600; color: #7ab7ff;' }, 'Run'),
+          el('div', { class: 'muted', style: 'font-size: 13px;' },
+            `${day.run.distance} mi · ${prettyTime_(day.run.time)} · ${day.run.pace}${day.run.shoe ? ' · ' + day.run.shoe : ''}`),
+        ]));
+      }
+      if (day.pullups) {
+        items.push(el('div', { style: 'padding: 8px 0;' }, [
+          el('div', { style: 'font-weight: 600; color: #7affb7;' }, 'Pull-Ups'),
+          el('div', { class: 'muted', style: 'font-size: 13px;' },
+            `${day.pullups.total} reps · ${day.pullups.weight || 'BW'}`),
+        ]));
+      }
+      if (!items.length) {
+        card.appendChild(el('div', { class: 'muted', style: 'font-size: 14px;' }, 'No activity logged.'));
+      } else {
+        items.forEach(i => card.appendChild(i));
+      }
+      detail.appendChild(card);
+      detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function prettyTime_(s) {
@@ -1312,39 +1595,70 @@
 
     async function renderProfile(app) {
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Profile')]));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
+      app.appendChild(skel);
+
+      let prof;
+      try { prof = await api('profile'); }
+      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline.')); return; }
+      skel.remove();
+
+      // PR badges
+      if (prof.bestEfforts && prof.bestEfforts.length) {
+        const grid = el('div', { class: 'pr-grid' });
+        prof.bestEfforts.forEach(pr => {
+          grid.appendChild(el('div', { class: 'pr-badge' }, [
+            el('div', { class: 'b-name' }, pr.bucket),
+            el('div', { class: 'b-pace' }, pr.pace + '/mi'),
+            el('div', { class: 'b-meta' }, `${prettyTime_(pr.time)} · ${pr.distance} mi · ${pr.date}`),
+          ]));
+        });
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Best efforts (all-time)'),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-bottom: 12px; margin-top: -8px;' },
+            'Fastest pace at each distance. Without GPS splits, these reflect your best run at ~that distance.'),
+          grid,
+        ]));
+      }
+
+      // Shoes
+      if (prof.shoes && prof.shoes.length) {
+        const card = el('div', { class: 'card' }, [el('h2', {}, 'Shoes')]);
+        prof.shoes.filter(s => s.active).forEach(s => {
+          const mi = s.totalMiles || 0;
+          const cls = mi > 450 ? 'danger' : (mi > 300 ? 'warn' : '');
+          const pct = Math.min(100, (mi / 500) * 100);
+          card.appendChild(el('div', { class: 'shoe-card' }, [
+            el('div', { class: 'shoe-name' }, s.name),
+            el('div', { class: 'shoe-brand' }, s.brand || ''),
+            el('div', { class: 'shoe-miles-row' }, [
+              el('div', { class: 'shoe-miles ' + cls }, String(mi) + ' mi'),
+              el('div', { class: 'muted', style: 'font-size: 11px;' },
+                `+${s.newMiles || 0} since start`),
+            ]),
+            el('div', { class: 'shoe-bar' }, [el('div', { class: 'shoe-bar-fill ' + cls, style: `width: ${pct}%;` })]),
+          ]));
+        });
+        const retired = prof.shoes.filter(s => !s.active);
+        if (retired.length) {
+          card.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px;' },
+            `Retired: ${retired.map(r => r.name).join(', ')}`));
+        }
+        app.appendChild(card);
+      }
+
+      // Weight placeholder
       app.appendChild(el('div', { class: 'card' }, [
-        el('h2', {}, 'Coming next iteration'),
-        el('div', { style: 'margin-top: 8px; font-size: 14px; line-height: 1.5;' },
-          'Will include:'),
-        el('ul', { style: 'margin: 10px 0 0 20px; font-size: 14px; line-height: 1.7; color: var(--muted);' }, [
-          el('li', {}, 'Body weight + height'),
-          el('li', {}, 'Shoe tracker (auto miles since start date)'),
-          el('li', {}, 'Best-effort PR badges'),
-        ]),
+        el('h2', {}, 'Body weight'),
+        el('div', { class: 'muted', style: 'font-size: 14px;' }, 'Next iteration: weigh-in log with weekly delta. Send me the green light when you want it wired up.'),
       ]));
     }
 
     // -------- Nav --------
     document.querySelectorAll('nav.bottom button').forEach(b => {
-      b.addEventListener('click', () => {
-        if (b.dataset.view === 'workout') {
-          openWorkoutPicker();
-        } else {
-          closeWorkoutPicker();
-          render(b.dataset.view);
-        }
-      });
+      b.addEventListener('click', () => render(b.dataset.view));
     });
-
-    // Workout picker
-    document.querySelectorAll('.picker-option').forEach(p => {
-      p.addEventListener('click', () => {
-        const pick = p.dataset.pick;
-        closeWorkoutPicker();
-        render(pick);
-      });
-    });
-    $('#workoutPickerBackdrop').addEventListener('click', closeWorkoutPicker);
 
     // -------- Init --------
     window.addEventListener('online', flushQueue);
