@@ -1360,7 +1360,10 @@
       const t = ex.prevTotal != null ? ex.prevTotal : ex.previous;
       const hasW = (w != null && w !== '' && w !== '—');
       const hasT = (t != null && t !== '' && t !== '—' && t !== 0 && t !== '0');
-      if (!hasW && !hasT) return null;
+      if (!hasW && !hasT) {
+        // Subtle hint so the user can tell "no data last week" from "feature broken".
+        return el('div', { class: 'prev', style: 'color: #555;' }, 'Last week: no data');
+      }
       const parts = [];
       if (hasW) parts.push(String(w) + (typeof w === 'number' ? ' lb' : ''));
       if (hasT) parts.push(String(t) + ' reps');
