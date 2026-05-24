@@ -109,6 +109,95 @@
     .pill.intensity { background: #3a1a1a; color: #ff7a7a; }
     .pill.core { background: #1a1a3a; color: #7a9bff; }
 
+    /* ---- RUN PLANNER TAB ---- */
+    .plan-dist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 4px; }
+    .plan-dist-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 6px; text-align: center; cursor: pointer; color: var(--text); font-family: inherit; transition: border-color 0.15s, background 0.15s; }
+    .plan-dist-btn.sel { border-color: var(--accent); background: rgba(255,107,53,0.12); }
+    .plan-dist-icon { font-size: 18px; margin-bottom: 3px; }
+    .plan-dist-name { font-size: 12px; font-weight: 700; display: block; }
+    .plan-dist-sub { font-size: 10px; color: var(--muted); display: block; margin-top: 1px; }
+    .plan-level-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .plan-level-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 6px; text-align: center; cursor: pointer; color: var(--text); font-family: inherit; transition: border-color 0.15s, background 0.15s; }
+    .plan-level-btn.sel { border-color: var(--accent); background: rgba(255,107,53,0.12); }
+    .plan-level-icon { font-size: 20px; margin-bottom: 4px; }
+    .plan-level-name { font-size: 12px; font-weight: 700; display: block; }
+    .plan-level-desc { font-size: 10px; color: var(--muted); display: block; margin-top: 2px; line-height: 1.3; }
+    .plan-slider-row { margin-bottom: 16px; }
+    .plan-slider-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .plan-slider-hdr label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .plan-slider-val { font-size: 22px; font-weight: 700; color: var(--accent); }
+    .plan-slider-val span { font-size: 12px; color: var(--muted); font-weight: 500; }
+    input.plan-range { -webkit-appearance: none; width: 100%; height: 4px; background: var(--border); border-radius: 2px; outline: none; cursor: pointer; border: none; padding: 0; }
+    input.plan-range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); box-shadow: 0 2px 8px rgba(255,107,53,0.4); cursor: pointer; }
+    .plan-slider-marks { display: flex; justify-content: space-between; margin-top: 4px; }
+    .plan-slider-marks span { font-size: 10px; color: var(--muted); }
+    .plan-optional { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; cursor: pointer; display: flex; align-items: center; gap: 10px; background: var(--surface-2); }
+    .plan-optional.active { border-color: var(--accent); }
+    .plan-opt-text strong { font-size: 13px; color: var(--text); display: block; }
+    .plan-opt-text small { font-size: 11px; color: var(--muted); }
+    .plan-opt-arrow { margin-left: auto; color: var(--muted); font-size: 16px; transition: transform 0.2s; }
+    .plan-optional.active .plan-opt-arrow { transform: rotate(90deg); }
+    .plan-race-fields { display: none; gap: 10px; margin-bottom: 12px; }
+    .plan-race-fields.vis { display: flex; }
+    .plan-race-col { flex: 1; }
+    .plan-race-col label { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 6px; display: block; }
+    .plan-err { background: rgba(255,69,58,0.1); border: 1px solid rgba(255,69,58,0.3); border-radius: 10px; padding: 12px; font-size: 13px; color: #ff453a; margin-top: 10px; display: none; }
+    .plan-err.vis { display: block; }
+    .plan-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+    .plan-stat { background: var(--surface-2); border-radius: var(--radius); padding: 12px 8px; text-align: center; border: 1px solid var(--border); }
+    .plan-stat .sv { font-size: 20px; font-weight: 700; color: var(--accent); }
+    .plan-stat .sl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+    .effort-pill { display: flex; background: var(--surface-2); border-radius: 20px; padding: 3px; gap: 2px; border: 1px solid var(--border); }
+    .effort-pill button { flex: 1; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; padding: 7px 10px; border-radius: 17px; width: auto; letter-spacing: 0; text-transform: none; }
+    .effort-pill button.active { background: var(--accent); color: #fff; }
+    .pace-guide-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 6px; }
+    .pace-gdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .pace-glabel { flex: 1; }
+    .pace-glabel strong { font-size: 13px; font-weight: 600; color: var(--text); display: block; }
+    .pace-glabel small { font-size: 11px; color: var(--muted); }
+    .pace-gval { font-size: 14px; font-weight: 700; color: var(--text); }
+    .plan-expand-row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .plan-expand-btn { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-family: inherit; width: auto; }
+    .plan-week-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 10px; overflow: hidden; }
+    .plan-week-hdr { display: flex; align-items: center; padding: 13px 14px; cursor: pointer; gap: 10px; }
+    .plan-wk-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 9px; border-radius: 20px; flex-shrink: 0; text-transform: uppercase; }
+    .plan-wk-badge.build { background: rgba(255,107,53,0.15); color: var(--accent); }
+    .plan-wk-badge.deload { background: rgba(138,138,138,0.15); color: var(--muted); }
+    .plan-wk-badge.taper { background: rgba(191,90,242,0.15); color: #bf5af2; }
+    .plan-wk-badge.race-wk { background: rgba(255,69,58,0.15); color: #ff453a; }
+    .plan-week-title { flex: 1; font-size: 14px; font-weight: 600; color: var(--text); min-width: 0; }
+    .plan-week-meta { text-align: right; flex-shrink: 0; }
+    .plan-week-mi { font-size: 15px; font-weight: 700; color: var(--text); }
+    .plan-week-ct { font-size: 11px; color: var(--muted); }
+    .plan-chevron { color: var(--muted); font-size: 12px; transition: transform 0.2s; flex-shrink: 0; }
+    .plan-week-hdr.open .plan-chevron { transform: rotate(180deg); }
+    .plan-workouts { display: none; padding: 0 12px 12px; gap: 8px; flex-direction: column; }
+    .plan-workouts.open { display: flex; }
+    .plan-wo-row { display: flex; gap: 10px; align-items: flex-start; padding: 11px; border-radius: var(--radius); border: 1px solid; }
+    .plan-wo-row.easy { background: rgba(50,215,75,0.06); border-color: rgba(50,215,75,0.18); }
+    .plan-wo-row.interval { background: rgba(255,69,58,0.06); border-color: rgba(255,69,58,0.18); }
+    .plan-wo-row.tempo { background: rgba(255,159,10,0.06); border-color: rgba(255,159,10,0.18); }
+    .plan-wo-row.longrun { background: rgba(191,90,242,0.06); border-color: rgba(191,90,242,0.18); }
+    .plan-wo-row.timetrial { background: rgba(255,55,95,0.06); border-color: rgba(255,55,95,0.18); }
+    .plan-wo-row.race { background: rgba(255,107,53,0.08); border-color: rgba(255,107,53,0.25); }
+    .plan-wo-bar { width: 3px; border-radius: 2px; align-self: stretch; min-height: 36px; flex-shrink: 0; }
+    .easy .plan-wo-bar { background: #32d74b; } .interval .plan-wo-bar { background: #ff453a; }
+    .tempo .plan-wo-bar { background: #ff9f0a; } .longrun .plan-wo-bar { background: #bf5af2; }
+    .timetrial .plan-wo-bar { background: #ff375f; } .race .plan-wo-bar { background: var(--accent); }
+    .plan-wo-info { flex: 1; min-width: 0; }
+    .plan-wo-type { font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 2px; }
+    .easy .plan-wo-type { color: #32d74b; } .interval .plan-wo-type { color: #ff453a; }
+    .tempo .plan-wo-type { color: #ff9f0a; } .longrun .plan-wo-type { color: #bf5af2; }
+    .timetrial .plan-wo-type { color: #ff375f; } .race .plan-wo-type { color: var(--accent); }
+    .plan-wo-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+    .plan-wo-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .plan-wo-effort { font-size: 11px; color: var(--muted); margin-top: 4px; font-style: italic; }
+    .plan-wo-dist { text-align: right; flex-shrink: 0; }
+    .plan-wo-dist .mi { font-size: 16px; font-weight: 700; color: var(--text); }
+    .plan-wo-dist .unit { font-size: 11px; color: var(--muted); }
+    .plan-tip { background: rgba(50,215,75,0.05); border: 1px solid rgba(50,215,75,0.12); border-radius: var(--radius); padding: 14px; font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 10px; }
+    .plan-tip strong { color: var(--text); }
+
     button, .btn {
       background: var(--accent);
       color: #fff;
@@ -681,6 +770,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
       Profile
     </button>
+    <button data-view="plan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3a3 3 0 0 0 6 0"/><path d="M8 11h8M8 15h5"/></svg>
+      Plan
+    </button>
   </nav>
 
   <div class="toast" id="toast"></div>
@@ -823,6 +916,7 @@
       else if (view === 'calendar') await renderCalendar(app);
       else if (view === 'analytics') await renderAnalytics(app);
       else if (view === 'profile') await renderProfile(app);
+      else if (view === 'plan') renderPlan(app);
     }
 
     function renderSetup(app) {
@@ -1656,6 +1750,376 @@
         el('h2', {}, 'Body weight'),
         el('div', { class: 'muted', style: 'font-size: 14px;' }, 'Next iteration: weigh-in log with weekly delta. Send me the green light when you want it wired up.'),
       ]));
+    }
+
+    // ======== RUN PLANNER ========
+    const P_DISTS = {
+      '1mi':  { label:'1 Mile',        miles:1.0,  peakLR:{beginner:4, intermediate:5,  advanced:5 } },
+      '2mi':  { label:'2 Miles',       miles:2.0,  peakLR:{beginner:5, intermediate:6,  advanced:6 } },
+      '5k':   { label:'5K',            miles:3.1,  peakLR:{beginner:6, intermediate:9,  advanced:10} },
+      '4mi':  { label:'4 Miles',       miles:4.0,  peakLR:{beginner:6, intermediate:8,  advanced:9 } },
+      '5mi':  { label:'5 Miles',       miles:5.0,  peakLR:{beginner:7, intermediate:9,  advanced:10} },
+      '10k':  { label:'10K',           miles:6.2,  peakLR:{beginner:8, intermediate:11, advanced:12} },
+      '15k':  { label:'15K',           miles:9.3,  peakLR:{beginner:9, intermediate:12, advanced:13} },
+      '10mi': { label:'10 Miles',      miles:10.0, peakLR:{beginner:10,intermediate:13, advanced:14} },
+      'hm':   { label:'Half Marathon', miles:13.1, peakLR:{beginner:10,intermediate:12, advanced:13} },
+    };
+    const P_START_LR = { beginner:1.5, intermediate:2.5, advanced:3.5 };
+    const P_INTERVALS = [
+      { name:'400m Repeats',      desc:'8×400m at hard effort. Rest: 90 sec standing/walking between each rep.',                                                              phase:'early' },
+      { name:'Pyramid Intervals', desc:'200m–400m–800m–400m–200m. Rest: 60 sec after 200m, 90 sec after 400m, 2 min after the 800m.',                                        phase:'early' },
+      { name:'Rolling 400s',      desc:'6×400m at controlled hard effort. Rest: 30 sec only — the short recovery is intentional.',                                           phase:'early' },
+      { name:'Drop Set',          desc:'6×400m starting fast, easing back each rep. Rest: 60 sec between reps.',                                                             phase:'mid'   },
+      { name:'Rolling 800s',      desc:'5×800m at tempo-to-hard effort. Rest: 90 sec rolling — not full recovery.',                                                          phase:'mid'   },
+      { name:'1km Repeats',       desc:'5×1km at 5K effort. Rest: 90 sec between reps — quality over quantity.',                                                             phase:'mid'   },
+      { name:'Mile Up & Overs',   desc:'Mile repeats alternating hard and easy. Rest: jog 400m easy between each mile rep.',                                                 phase:'mid'   },
+      { name:'Broken Miles',      desc:'Each mile split into 200m–400m sections at hard effort. Rest: 30 sec between sections, 90 sec between miles.',                       phase:'late'  },
+      { name:"1k into Broken K's",desc:'1km hard, then 600m as 3×200m bursts. Rest: 30 sec between 200m, 2 min between sets.',                                              phase:'late'  },
+      { name:'Repeating Drop Set',desc:'Full 6×400m drop set repeated twice. Rest: 60 sec between reps, 3 min between the two sets.',                                        phase:'late'  },
+    ];
+    const P_TEMPOS = [
+      { name:'Progression Run',    desc:'Continuous run — easy start, build to tempo over the final third. No rest.',                                                         phase:'early' },
+      { name:'Rolling 400s Tempo', desc:"6×400m at tempo pace. Rest: 30 sec active recovery jog — keep moving, don't stop.",                                                 phase:'early' },
+      { name:'Over & Unders 1km',  desc:'4×1km alternating slightly above/below threshold pace. Rest: 90 sec easy jog between reps.',                                        phase:'mid'   },
+      { name:'Tempo 1200s',        desc:'4×1200m at comfortably hard (tempo) effort. Rest: 2 min easy jog between reps.',                                                    phase:'mid'   },
+      { name:'On Off 200s',        desc:'200m hard, 200m easy — repeat 8–10 times continuously. No full rest stops.',                                                        phase:'mid'   },
+      { name:'Steady into Tempo',  desc:'Continuous run — easy for the first half, building into 2+ miles of sustained tempo. No rest.',                                     phase:'late'  },
+      { name:'Over & Unders Miles',desc:'Mile repeats alternating slightly above/below threshold. Rest: 90 sec easy jog between each mile.',                                 phase:'late'  },
+    ];
+    const P_LONG_RUNS = [
+      { name:'Easy Long Run',               desc:'Steady easy effort — keep it conversational the whole way.',               phase:'early' },
+      { name:'Block Long Run',              desc:'Middle miles at steady effort, easy warm-up and cool-down miles.',         phase:'early' },
+      { name:'Progressive Long Run',        desc:'Last 2 miles at tempo effort after an easy start.',                       phase:'mid'   },
+      { name:'Hotspot Long Run',            desc:'3–4 "hotspot" miles at steady/tempo effort within the long run.',         phase:'mid'   },
+      { name:'Progressive Repeat Long Run', desc:'Multiple tempo segments throughout — advanced long run stimulus.',        phase:'late'  },
+    ];
+    const P_EASY_DESCS = [
+      'Conversational pace — you should be able to talk in full sentences.',
+      'Very easy effort, 5–6/10 RPE. Focus on form and recovery.',
+      'Active recovery run. Go slower than you think you need to.',
+      'Easy aerobic run. Keep your heart rate low and relaxed.',
+    ];
+    const P_EFFORT = {
+      easy:      { rpe:'Effort: conversational, 5–6/10 RPE',      zone:'Zone 2 (60–70% max HR) — fully conversational.' },
+      tempo:     { rpe:'Effort: comfortably hard, 7/10 RPE',      zone:'Zone 3–4 (80–90% max HR) — labored but controlled.' },
+      interval:  { rpe:'Effort: hard, 8–9/10 RPE',               zone:'Zone 4–5 (85–95% max HR) — speaking is very difficult.' },
+      longrun:   { rpe:'Effort: easy throughout, 5–6/10 RPE',    zone:'Zone 2 (60–70% max HR) — distance is the goal.' },
+      timetrial: { rpe:'All-out effort — note your time.',         zone:'Zone 5 (95–100% max HR) — hold nothing back.' },
+      race:      { rpe:'Run your race — trust your training.',     zone:'Start Zone 3–4, build to Zone 5 in the final push.' },
+    };
+    let planEffortMode = 'rpe';
+    let planDistSel = null, planLevelSel = null;
+
+    function pRound(n) { return Math.round(n * 4) / 4; }
+    function pParseTime(s) {
+      if (!s) return null;
+      const parts = s.trim().split(':').map(Number);
+      if (parts.some(isNaN)) return null;
+      if (parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
+      if (parts.length === 2) return parts[0]*60 + parts[1];
+      return null;
+    }
+    function pSecsToMMSS(s) { s = Math.round(s); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
+    function pDistMiles(k) { return ({  '1mi':1,'2mi':2,'5k':3.1,'4mi':4,'5mi':5,'10k':6.2,'hm':13.1 })[k]||null; }
+    function pPaces(level, rDist, rTime) {
+      if (!rDist || !rTime) return null;
+      const secs = pParseTime(rTime), miles = pDistMiles(rDist);
+      if (!secs || !miles) return null;
+      const ppm = secs / miles;
+      const eOff = {beginner:150,intermediate:105,advanced:75};
+      const tOff = {beginner:45, intermediate:25, advanced:12};
+      const iOff = {beginner:5,  intermediate:-10,advanced:-20};
+      return {
+        easy:     pSecsToMMSS(ppm + (eOff[level]||105)) + '/mi',
+        tempo:    pSecsToMMSS(ppm + (tOff[level]||25))  + '/mi',
+        interval: pSecsToMMSS(ppm + (iOff[level]||-10)) + '/mi',
+      };
+    }
+    function pLRForBuildWeek(w, totalWeeks, startLR, peakLR) {
+      const peak = totalWeeks - 3;
+      if (w <= 1) return startLR;
+      if (w >= peak) return peakLR;
+      return startLR + (peakLR - startLR) * ((w-1)/(peak-1));
+    }
+    function pMakeEasy(dist)           { return { type:'easy',      typeLabel:'Easy Run',       name:'Easy Run',         dist:Math.max(1.0,pRound(dist)), desc:P_EASY_DESCS[Math.floor(Math.random()*P_EASY_DESCS.length)], effortType:'easy',      paceOverride:null }; }
+    function pMakeInterval(dist,ph,isD,paces) {
+      const pool = isD ? P_INTERVALS.filter(x=>x.phase==='early') : P_INTERVALS.filter(x=>ph<0.35?x.phase==='early':ph<0.65?x.phase!=='late':true);
+      const w = pool[Math.floor(ph*pool.length)%pool.length];
+      return { type:'interval', typeLabel:'Intervals', name:w.name, dist:Math.max(1.5,pRound(isD?dist*0.7:dist)), desc:w.desc, effortType:'interval', paceOverride:paces?`Target: ${paces.interval}`:null };
+    }
+    function pMakeTempo(dist,ph,isD,paces) {
+      const pool = isD ? P_TEMPOS.filter(x=>x.phase==='early') : P_TEMPOS.filter(x=>ph<0.35?x.phase==='early':ph<0.65?x.phase!=='late':true);
+      const w = pool[Math.floor(ph*pool.length)%pool.length];
+      return { type:'tempo', typeLabel:'Tempo', name:w.name, dist:Math.max(1.5,pRound(isD?dist*0.7:dist)), desc:w.desc, effortType:'tempo', paceOverride:paces?`Target: ${paces.tempo}`:null };
+    }
+    function pMakeLR(dist,ph,isTaper,paces) {
+      const pool = isTaper ? [P_LONG_RUNS[0]] : P_LONG_RUNS.filter(x=>ph<0.35?x.phase==='early':ph<0.65?x.phase!=='late':true);
+      const lr = pool[Math.floor(ph*pool.length)%pool.length];
+      return { type:'longrun', typeLabel:'Long Run', name:lr.name, dist:Math.max(1.5,pRound(dist)), desc:lr.desc, effortType:'longrun', paceOverride:paces?`Easy pace: ${paces.easy}`:null };
+    }
+    function pMakeTimeTrial() {
+      return { type:'timetrial', typeLabel:'Time Trial', name:'2 Mile Time Trial', dist:3.0, desc:'A fitness check — run 2 miles at your best effort to track progress mid-plan.', effortType:'timetrial', paceOverride:null };
+    }
+    function pMakeTaper(dist,paces) {
+      return { type:'interval', typeLabel:'Taper Intervals', name:'Taper 400s', dist:dist||3.0, desc:'6×400m at race pace. Rest: 2–3 min full standing recovery between each rep — the goal is freshness, not fatigue.', effortType:'interval', paceOverride:paces?`Race pace: ${paces.interval}`:null };
+    }
+    function pMakeRace(distObj) {
+      return { type:'race', typeLabel:'Race Day', name:`🏁 ${distObj.label} Race`, dist:pRound(distObj.miles), desc:'Race day! Warm up 10–15 min easy, then trust your training and give it everything.', effortType:'race', paceOverride:null };
+    }
+    function pBuildWeek(wi, totalWeeks, days, level, peakLR, startLR, paces, distKey) {
+      const w = wi+1, buildWeeks = totalWeeks-3;
+      let wType = 'build';
+      if (w===totalWeeks) wType='race';
+      else if (w>=totalWeeks-1) wType='taper';
+      else if (w%4===0 && w<totalWeeks-1) wType='deload';
+      const ph = Math.min(1,(w-1)/Math.max(buildWeeks-1,1));
+      const isD = wType==='deload', isT = wType==='taper', isR = wType==='race';
+      let lr = w===1 ? startLR : isR ? null : isT ? pRound(peakLR*0.55) : isD ? pRound(pLRForBuildWeek(w-1,totalWeeks,startLR,peakLR)*0.65) : pRound(pLRForBuildWeek(w,totalWeeks,startLR,peakLR));
+      const iDist=pRound(2.0+ph*2.5), tDist=pRound(2.0+ph*3.0), eDist=pRound((lr||0)*0.65), e2Dist=pRound((lr||0)*0.55);
+      const wos = [];
+      const isTT = !isD&&!isT&&!isR && w===Math.round(totalWeeks*0.55);
+      if (w===1) {
+        wos.push(pMakeEasy(lr));
+      } else if (isR) {
+        wos.push(pMakeTaper(null,paces));
+        wos.push(pMakeRace(P_DISTS[distKey]));
+      } else if (isT) {
+        const ti=pRound(Math.max(2.5,peakLR*0.35));
+        wos.push(pMakeTaper(ti,paces));
+        if(days>=3) wos.push(pMakeEasy(pRound(lr*0.6)));
+        wos.push(pMakeLR(lr,ph,true,paces));
+      } else if (isTT) {
+        const tt=pMakeTimeTrial();
+        if(days===2) { wos.push(tt); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else if(days===3) { wos.push(tt); wos.push(pMakeEasy(eDist)); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else if(days===4) { wos.push(pMakeEasy(eDist)); wos.push(tt); wos.push(pMakeTempo(tDist,ph,isD,paces)); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else { wos.push(pMakeInterval(iDist,ph,isD,paces)); wos.push(pMakeEasy(eDist)); wos.push(tt); wos.push(pMakeLR(lr,ph,false,paces)); wos.push(pMakeEasy(e2Dist)); }
+      } else {
+        if(days===2) { wos.push(pMakeInterval(iDist,ph,isD,paces)); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else if(days===3) { wos.push(pMakeInterval(iDist,ph,isD,paces)); wos.push(pMakeEasy(eDist)); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else if(days===4) { wos.push(pMakeEasy(eDist)); wos.push(pMakeInterval(iDist,ph,isD,paces)); wos.push(pMakeTempo(tDist,ph,isD,paces)); wos.push(pMakeLR(lr,ph,false,paces)); }
+        else { wos.push(pMakeInterval(iDist,ph,isD,paces)); wos.push(pMakeEasy(eDist)); wos.push(pMakeTempo(tDist,ph,isD,paces)); wos.push(pMakeLR(lr,ph,false,paces)); wos.push(pMakeEasy(e2Dist)); }
+      }
+      const total = pRound(wos.reduce((s,x)=>s+x.dist,0));
+      return { wType, label: isR?'Race Week':isT?'Taper Week':isD?`Week ${w} — Recovery`:`Week ${w}`, wos, total };
+    }
+    function pEffortText(effortType, paceOverride) {
+      if (paceOverride) return null; // handled separately
+      return P_EFFORT[effortType]?.[planEffortMode] || '';
+    }
+    function pRenderWo(wo) {
+      const effort = paceOverride => paceOverride
+        ? `<div class="plan-wo-effort">${paceOverride}</div><div class="plan-wo-effort" data-rpe="${P_EFFORT[wo.effortType]?.rpe||''}" data-zone="${P_EFFORT[wo.effortType]?.zone||''}">${P_EFFORT[wo.effortType]?.[planEffortMode]||''}</div>`
+        : `<div class="plan-wo-effort" data-rpe="${P_EFFORT[wo.effortType]?.rpe||''}" data-zone="${P_EFFORT[wo.effortType]?.zone||''}">${P_EFFORT[wo.effortType]?.[planEffortMode]||''}</div>`;
+      return `<div class="plan-wo-row ${wo.type}">
+        <div class="plan-wo-bar"></div>
+        <div class="plan-wo-info">
+          <div class="plan-wo-type">${wo.typeLabel}</div>
+          <div class="plan-wo-name">${wo.name}</div>
+          <div class="plan-wo-desc">${wo.desc}</div>
+          ${effort(wo.paceOverride)}
+        </div>
+        <div class="plan-wo-dist"><div class="mi">${wo.dist}</div><div class="unit">mi</div></div>
+      </div>`;
+    }
+    function pSetEffort(mode) {
+      planEffortMode = mode;
+      document.getElementById('pEffRPE')?.classList.toggle('active', mode==='rpe');
+      document.getElementById('pEffZone')?.classList.toggle('active', mode==='zone');
+      document.querySelectorAll('.plan-wo-effort[data-rpe]').forEach(el => { el.textContent = mode==='rpe' ? el.dataset.rpe : el.dataset.zone; });
+    }
+    function pToggleWeek(hdr) { hdr.classList.toggle('open'); hdr.nextElementSibling.classList.toggle('open'); }
+    function pExpandAll()   { document.querySelectorAll('.plan-week-hdr').forEach(h=>{h.classList.add('open');h.nextElementSibling.classList.add('open');}); }
+    function pCollapseAll() { document.querySelectorAll('.plan-week-hdr').forEach(h=>{h.classList.remove('open');h.nextElementSibling.classList.remove('open');}); }
+
+    function renderPlan(app) {
+      app.appendChild(el('header', { class:'top' }, [el('h1', {}, 'Run Planner')]));
+      const root = el('div');
+      app.appendChild(root);
+      let savedState = {};
+      try { savedState = JSON.parse(localStorage.getItem('runPlanState_v1') || '{}'); } catch(e) {}
+      planDistSel  = savedState.dist  || null;
+      planLevelSel = savedState.level || null;
+
+      root.innerHTML = `
+        <div class="card" id="pForm">
+          <h2>TARGET DISTANCE</h2>
+          <div class="plan-dist-grid" style="margin-bottom:20px">
+            ${[['1mi','🏃','1 Mile','Speed'],['2mi','🏃','2 Miles','Speed-end.'],['5k','🎯','5K','3.1 mi'],['4mi','🏅','4 Miles','Road race'],['5mi','🏅','5 Miles','Road race'],['10k','⭐','10K','6.2 mi'],['15k','💪','15K','9.3 mi'],['10mi','💪','10 Miles','Road race'],['hm','🏆','Half Marathon','13.1 mi']].map(([k,ic,lb,sb])=>`
+              <button class="plan-dist-btn${planDistSel===k?' sel':''}" onclick="planDistSel='${k}';document.querySelectorAll('.plan-dist-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel')">
+                <div class="plan-dist-icon">${ic}</div>
+                <span class="plan-dist-name">${lb}</span>
+                <span class="plan-dist-sub">${sb}</span>
+              </button>`).join('')}
+          </div>
+          <h2>FITNESS LEVEL</h2>
+          <div class="plan-level-grid" style="margin-bottom:20px">
+            ${[['beginner','🌱','Beginner','New to running or returning after a break'],['intermediate','🔥','Intermediate','Running regularly, some race experience'],['advanced','⚡','Advanced','Consistent training, chasing a PR']].map(([k,ic,lb,ds])=>`
+              <button class="plan-level-btn${planLevelSel===k?' sel':''}" onclick="planLevelSel='${k}';document.querySelectorAll('.plan-level-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel')">
+                <div class="plan-level-icon">${ic}</div>
+                <span class="plan-level-name">${lb}</span>
+                <span class="plan-level-desc">${ds}</span>
+              </button>`).join('')}
+          </div>
+          <div class="field">
+            <label>Current weekly mileage (miles/week)</label>
+            <input id="pMiles" type="number" inputmode="decimal" placeholder="e.g. 10" value="${savedState.miles||''}" style="text-align:left">
+          </div>
+          <div class="plan-optional" id="pRaceToggle" onclick="this.classList.toggle('active');document.getElementById('pRaceFields').classList.toggle('vis')">
+            <span style="font-size:18px">⏱️</span>
+            <div class="plan-opt-text"><strong>Add a recent race time</strong><small>Unlocks personalized pace targets</small></div>
+            <span class="plan-opt-arrow">›</span>
+          </div>
+          <div class="plan-race-fields" id="pRaceFields">
+            <div class="plan-race-col">
+              <label>Race distance</label>
+              <select id="pRaceDist">
+                <option value="">Select…</option>
+                <option value="1mi">1 Mile</option><option value="2mi">2 Miles</option>
+                <option value="5k">5K</option><option value="4mi">4 Miles</option>
+                <option value="5mi">5 Miles</option><option value="10k">10K</option>
+                <option value="hm">Half Marathon</option>
+              </select>
+            </div>
+            <div class="plan-race-col">
+              <label>Finish time (h:mm:ss)</label>
+              <input id="pRaceTime" type="text" inputmode="text" placeholder="e.g. 28:40" value="${savedState.raceTime||''}">
+            </div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Days per week</label>
+              <div class="plan-slider-val" id="pDaysVal">3 <span>days</span></div>
+            </div>
+            <input type="range" class="plan-range" id="pDays" min="2" max="5" value="${savedState.days||3}" oninput="document.getElementById('pDaysVal').innerHTML=this.value+' <span>days</span>'">
+            <div class="plan-slider-marks"><span>2</span><span>3</span><span>4</span><span>5</span></div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Program duration</label>
+              <div class="plan-slider-val" id="pWeeksVal">12 <span>wks</span></div>
+            </div>
+            <input type="range" class="plan-range" id="pWeeks" min="8" max="16" value="${savedState.weeks||12}" oninput="document.getElementById('pWeeksVal').innerHTML=this.value+' <span>wks</span>'">
+            <div class="plan-slider-marks"><span>8</span><span>10</span><span>12</span><span>14</span><span>16</span></div>
+          </div>
+          <div class="plan-err" id="pErr"></div>
+          <button onclick="planGenerate()">▶  Generate My Plan</button>
+        </div>
+        <div id="pOutput" style="display:none"></div>
+      `;
+
+      // Restore slider display values
+      const dv = savedState.days||3, wv = savedState.weeks||12;
+      document.getElementById('pDaysVal').innerHTML  = `${dv} <span>days</span>`;
+      document.getElementById('pWeeksVal').innerHTML = `${wv} <span>wks</span>`;
+
+      // Restore race dist if saved
+      if (savedState.raceDist) {
+        const s = document.getElementById('pRaceDist');
+        if (s) s.value = savedState.raceDist;
+        if (savedState.raceTime) { document.getElementById('pRaceToggle').classList.add('active'); document.getElementById('pRaceFields').classList.add('vis'); }
+      }
+
+      // If there's a saved generated plan, show it
+      if (savedState.weeks_data) pShowOutput(savedState);
+    }
+
+    function planGenerate() {
+      const errEl = document.getElementById('pErr');
+      errEl.classList.remove('vis');
+      if (!planDistSel)  { errEl.textContent='Please select a target distance.'; errEl.classList.add('vis'); return; }
+      if (!planLevelSel) { errEl.textContent='Please select your fitness level.'; errEl.classList.add('vis'); return; }
+      const miles = parseFloat(document.getElementById('pMiles').value);
+      if (isNaN(miles)||miles<0) { errEl.textContent='Please enter your current weekly mileage.'; errEl.classList.add('vis'); return; }
+      const days  = parseInt(document.getElementById('pDays').value);
+      const weeks = parseInt(document.getElementById('pWeeks').value);
+      const raceDist = document.getElementById('pRaceDist').value;
+      const raceTime = document.getElementById('pRaceTime').value.trim();
+      const paces = pPaces(planLevelSel, raceDist, raceTime);
+      const distData = P_DISTS[planDistSel];
+      const peakLR = distData.peakLR[planLevelSel];
+      const estLong = miles * 0.35;
+      const startLR = pRound(Math.max(P_START_LR[planLevelSel], Math.min(estLong, peakLR * 0.4)));
+      const weeksData = [];
+      let totalMi = 0;
+      for (let i=0; i<weeks; i++) {
+        const wk = pBuildWeek(i, weeks, days, planLevelSel, peakLR, startLR, paces, planDistSel);
+        weeksData.push(wk);
+        totalMi += wk.total;
+      }
+      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
+      try { localStorage.setItem('runPlanState_v1', JSON.stringify(state)); } catch(e) {}
+      pShowOutput(state);
+    }
+
+    function pShowOutput(state) {
+      const out = document.getElementById('pOutput');
+      if (!out) return;
+      const levelNames = { beginner:'Beginner', intermediate:'Intermediate', advanced:'Advanced' };
+      const dist = P_DISTS[state.dist];
+      out.style.display = 'block';
+      let paceGuideHTML = '';
+      if (state.paces) {
+        paceGuideHTML = `<div class="card" style="margin-bottom:12px">
+          <h2>PACE TARGETS</h2>
+          <div class="pace-guide-row" style="background:rgba(50,215,75,0.06);border-radius:10px">
+            <div class="pace-gdot" style="background:#32d74b"></div>
+            <div class="pace-glabel"><strong>Easy / Long Run</strong><small>Conversational — all easy &amp; long runs</small></div>
+            <div class="pace-gval">${state.paces.easy}</div>
+          </div>
+          <div class="pace-guide-row" style="background:rgba(255,159,10,0.06);border-radius:10px">
+            <div class="pace-gdot" style="background:#ff9f0a"></div>
+            <div class="pace-glabel"><strong>Tempo</strong><small>Comfortably hard — tempo sessions</small></div>
+            <div class="pace-gval">${state.paces.tempo}</div>
+          </div>
+          <div class="pace-guide-row" style="background:rgba(255,69,58,0.06);border-radius:10px">
+            <div class="pace-gdot" style="background:#ff453a"></div>
+            <div class="pace-glabel"><strong>Intervals</strong><small>Hard effort — speed sessions</small></div>
+            <div class="pace-gval">${state.paces.interval}</div>
+          </div>
+        </div>`;
+      }
+      out.innerHTML = `
+        <div class="card" style="margin-bottom:12px">
+          <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;margin-bottom:2px">${dist.label} Training Plan</div>
+          <div class="muted" style="font-size:13px;margin-bottom:16px">${levelNames[state.level]} · ${state.days} days/week</div>
+          <div class="plan-stats">
+            <div class="plan-stat"><div class="sv">${state.weeks}</div><div class="sl">Weeks</div></div>
+            <div class="plan-stat"><div class="sv">${state.totalMi}</div><div class="sl">Total Miles</div></div>
+            <div class="plan-stat"><div class="sv">${P_DISTS[state.dist].peakLR[state.level]}mi</div><div class="sl">Peak Long Run</div></div>
+          </div>
+        </div>
+        ${paceGuideHTML}
+        <div class="card" style="margin-bottom:12px">
+          <div class="spaced" style="margin-bottom:0">
+            <span style="font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Effort display</span>
+            <div class="effort-pill">
+              <button id="pEffRPE" class="${planEffortMode==='rpe'?'active':''}" onclick="pSetEffort('rpe')">RPE</button>
+              <button id="pEffZone" class="${planEffortMode==='zone'?'active':''}" onclick="pSetEffort('zone')">HR Zones</button>
+            </div>
+          </div>
+        </div>
+        <div class="plan-expand-row">
+          <button class="plan-expand-btn" onclick="pExpandAll()">Expand All</button>
+          <button class="plan-expand-btn" onclick="pCollapseAll()">Collapse All</button>
+        </div>
+        ${(state.weeks_data||[]).map((wk,i) => {
+          const badge = wk.wType==='deload'?'deload':wk.wType==='taper'?'taper':wk.wType==='race'?'race-wk':'build';
+          const badgeText = wk.wType==='deload'?'Recovery':wk.wType==='taper'?'Taper':wk.wType==='race'?'Race':`Wk ${i+1}`;
+          return `<div class="plan-week-card">
+            <div class="plan-week-hdr" onclick="pToggleWeek(this)">
+              <span class="plan-wk-badge ${badge}">${badgeText}</span>
+              <span class="plan-week-title">${wk.label}</span>
+              <div class="plan-week-meta"><div class="plan-week-mi">${wk.total} mi</div><div class="plan-week-ct">${wk.wos.length} run${wk.wos.length!==1?'s':''}</div></div>
+              <span class="plan-chevron">▾</span>
+            </div>
+            <div class="plan-workouts">${wk.wos.map(pRenderWo).join('')}</div>
+          </div>`;
+        }).join('')}
+        <div class="plan-tip"><strong>Warm-up &amp; cool-down:</strong> Easy/Long runs — start the first 5–10 min very easy; walk 3–5 min after. Intervals — 5–10 min easy jog + dynamic drills before, 5–10 min easy jog after. Tempo — 5–10 min easy + 2–3 short strides before, 5 min easy after. Static stretching always <em>after</em> your run, not before.<br><br><strong>General tips:</strong> Easy runs should feel fully conversational. Rest days are training — don't skip them. If you feel worn down, repeat a week rather than pushing through.</div>
+        <div style="height:8px"></div>
+      `;
+      out.scrollIntoView({ behavior:'smooth', block:'start' });
     }
 
     // -------- Nav --------
