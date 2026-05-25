@@ -889,11 +889,16 @@
     }
 
     // -------- Supabase auth --------
-    // Replace the two placeholder strings below with your Supabase project URL and anon key.
     const SUPABASE_URL     = 'https://qvfsyqfnrtpvuoqgtrbk.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_ogAKGcg94Ap4rwTDfNvcTw_o-yIcOev';
     const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let currentUser = null; // set by onAuthStateChange
+
+    // -------- Allowlist — add friend emails here --------
+    const ALLOWED_EMAILS = [
+      'jeffhookie@gmail.com',
+      // 'friend@example.com',
+    ];
 
     // -------- App state --------
     let currentView = 'home';
@@ -2217,7 +2222,16 @@
     // Auth state listener — fires on sign-in and sign-out
     _sb.auth.onAuthStateChange((event, session) => {
       const wasLoggedIn = !!currentUser;
-      currentUser = session?.user ?? null;
+      const user = session?.user ?? null;
+
+      // Allowlist check — sign out anyone not on the list
+      if (event === 'SIGNED_IN' && user && !ALLOWED_EMAILS.includes(user.email)) {
+        _sb.auth.signOut();
+        toast('This app is invite-only. Contact Jeff to get access.', true);
+        return;
+      }
+
+      currentUser = user;
       if (event === 'SIGNED_IN' && !wasLoggedIn) {
         render(currentView || 'home');
         flushQueue();
