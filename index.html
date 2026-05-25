@@ -897,7 +897,6 @@
     // -------- Allowlist — add friend emails here --------
     const ALLOWED_EMAILS = [
       'jeffhookie@gmail.com',
-      'jeffhookies@gmail.com',
       // 'friend@example.com',
     ];
 
@@ -924,7 +923,10 @@
     }
 
     // -------- Auth UI --------
+    let _authEmail = ''; // persists email between OTP steps
+
     function renderAuth(app) {
+      _authEmail = '';
       app.innerHTML = '';
       document.querySelectorAll('nav.bottom button').forEach(b => b.classList.remove('active'));
       const wrap = el('div', { class: 'auth-wrap' }, [
@@ -933,36 +935,65 @@
         el('p', { class: 'auth-sub' }, 'Sign in to track your training'),
         el('div', { class: 'auth-card', id: 'auth-card' }, [
           el('input', { type: 'email', id: 'auth-email', placeholder: 'your@email.com', autocomplete: 'email' }),
-          el('button', { class: 'btn', onclick: authSendLink }, 'Send magic link'),
+          el('button', { class: 'btn', id: 'auth-send-btn', onclick: authSendCode }, 'Send code'),
         ]),
       ]);
       app.appendChild(wrap);
-      // Auto-focus email field after render
       setTimeout(() => { const e = document.getElementById('auth-email'); if (e) e.focus(); }, 50);
     }
 
-    async function authSendLink() {
+    async function authSendCode() {
       const emailEl = document.getElementById('auth-email');
       const email = (emailEl ? emailEl.value : '').trim();
       if (!email || !email.includes('@')) { toast('Enter a valid email address', true); return; }
-      const btn = document.querySelector('.auth-card .btn');
+      const btn = document.getElementById('auth-send-btn');
       if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-      const { error } = await _sb.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.href.split('#')[0] },
-      });
+      const { error } = await _sb.auth.signInWithOtp({ email });
       if (error) {
         toast(error.message, true);
-        if (btn) { btn.disabled = false; btn.textContent = 'Send magic link'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Send code'; }
         return;
       }
+      _authEmail = email;
       const card = document.getElementById('auth-card');
       if (card) {
         card.innerHTML = '';
         const confirm = el('div', { class: 'auth-confirm' });
-        confirm.innerHTML = `<div class="auth-check">✉️</div><p>Magic link sent to <strong>${email}</strong>.<br>Tap the link in your email to sign in.</p>`;
+        confirm.innerHTML = `<div class="auth-check">✉️</div><p>Code sent to <strong>${email}</strong>.<br>Enter the 6-digit code from your email.</p>`;
         card.appendChild(confirm);
+        const codeInput = el('input', {
+          type: 'text',
+          id: 'auth-code',
+          placeholder: '000000',
+          inputmode: 'numeric',
+          maxlength: '6',
+          autocomplete: 'one-time-code',
+          style: 'text-align:center; font-size:28px; letter-spacing:10px; width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:14px 16px;',
+        });
+        card.appendChild(codeInput);
+        card.appendChild(el('button', { class: 'btn', id: 'auth-verify-btn', onclick: authVerifyCode }, 'Verify'));
+        card.appendChild(el('button', {
+          class: 'btn',
+          style: 'background:none; color:var(--muted); font-size:13px; border:none; margin-top:-4px;',
+          onclick: () => renderAuth($('#app')),
+        }, 'Use a different email'));
+        setTimeout(() => { const c = document.getElementById('auth-code'); if (c) c.focus(); }, 50);
       }
+    }
+
+    async function authVerifyCode() {
+      const codeEl = document.getElementById('auth-code');
+      const code = (codeEl ? codeEl.value : '').replace(/\s/g, '');
+      if (!code || code.length < 6) { toast('Enter the 6-digit code', true); return; }
+      const btn = document.getElementById('auth-verify-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+      const { error } = await _sb.auth.verifyOtp({ email: _authEmail, token: code, type: 'email' });
+      if (error) {
+        toast(error.message, true);
+        if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
+        return;
+      }
+      // onAuthStateChange handles SIGNED_IN and calls render()
     }
 
     // -------- Render --------
