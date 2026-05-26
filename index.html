@@ -2303,6 +2303,9 @@
     window.addEventListener('online', flushQueue);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
+    // Guard to prevent double-render when both onAuthStateChange and getSession fire at startup
+    let _startupRenderDone = false;
+
     // Auth state listener — fires on sign-in and sign-out
     _sb.auth.onAuthStateChange((event, session) => {
       const wasLoggedIn = !!currentUser;
@@ -2317,6 +2320,7 @@
 
       currentUser = user;
       if (event === 'SIGNED_IN' && !wasLoggedIn) {
+        _startupRenderDone = true;
         render(currentView || 'home');
         flushQueue();
       }
@@ -2328,7 +2332,9 @@
     });
 
     // Check for existing session on load (handles returning users + magic link redirect)
+    // Skip if onAuthStateChange already triggered a render (prevents double-render race condition)
     _sb.auth.getSession().then(({ data: { session } }) => {
+      if (_startupRenderDone) return;
       currentUser = session?.user ?? null;
       render('home');
       if (currentUser) flushQueue();
