@@ -959,14 +959,14 @@
       if (card) {
         card.innerHTML = '';
         const confirm = el('div', { class: 'auth-confirm' });
-        confirm.innerHTML = `<div class="auth-check">✉️</div><p>Code sent to <strong>${email}</strong>.<br>Enter the 6-digit code from your email.</p>`;
+        confirm.innerHTML = `<div class="auth-check">✉️</div><p>Code sent to <strong>${email}</strong>.<br>Enter the code from your email.</p>`;
         card.appendChild(confirm);
         const codeInput = el('input', {
           type: 'text',
           id: 'auth-code',
-          placeholder: '000000',
+          placeholder: '00000000',
           inputmode: 'numeric',
-          maxlength: '6',
+          maxlength: '8',
           autocomplete: 'one-time-code',
           style: 'text-align:center; font-size:28px; letter-spacing:10px; width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:14px 16px;',
         });
@@ -984,7 +984,7 @@
     async function authVerifyCode() {
       const codeEl = document.getElementById('auth-code');
       const code = (codeEl ? codeEl.value : '').replace(/\s/g, '');
-      if (!code || code.length < 6) { toast('Enter the 6-digit code', true); return; }
+      if (!code || code.length < 6) { toast('Enter the full code from your email', true); return; }
       const btn = document.getElementById('auth-verify-btn');
       if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
       const { error } = await _sb.auth.verifyOtp({ email: _authEmail, token: code, type: 'email' });
