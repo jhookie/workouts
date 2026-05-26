@@ -444,7 +444,7 @@
     /* Home action grid */
     .action-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-columns: 1fr 1fr;
       gap: 10px;
       margin-bottom: 12px;
     }
@@ -1005,7 +1005,7 @@
       if (!currentUser) return renderAuth(app);
 
       // lift/run/pullups don't have a top-level nav anymore — they highlight Home.
-      const navView = (view === 'lift' || view === 'run' || view === 'pullups') ? 'home' : view;
+      const navView = (view === 'lift' || view === 'run' || view === 'pullups' || view === 'walk') ? 'home' : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
       });
@@ -1018,6 +1018,7 @@
       else if (view === 'lift') await renderLift(app);
       else if (view === 'run') await renderRun(app);
       else if (view === 'pullups') await renderPullUps(app);
+      else if (view === 'walk') await renderWalk(app);
       else if (view === 'calendar') await renderCalendar(app);
       else if (view === 'analytics') await renderAnalytics(app);
       else if (view === 'profile') await renderProfile(app);
@@ -1086,6 +1087,7 @@
         actionTile_('lift', 'Lift', todayKind === 'lift'),
         actionTile_('run', 'Run', todayKind === 'run'),
         actionTile_('pullups', 'Pull-Ups', false),
+        actionTile_('walk', 'Walk', false),
       ]);
       app.appendChild(grid);
 
@@ -1093,9 +1095,6 @@
       if (today.sessionType === 'lift' && today.blockName) {
         app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
           `${today.blockName} · Week ${today.programWeek} · Day ${today.liftDay} — ${dayTitle(today.liftDay)}`));
-      } else if (today.sessionType === 'run') {
-        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
-          'Today: run day · goal 10–15 mi/week'));
       } else if (today.sessionType === 'rest') {
         app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
           'Today: rest'));
@@ -1154,6 +1153,7 @@
         lift: '<path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/>',
         run: '<circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/>',
         pullups: '<path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/>',
+        walk: '<circle cx="13" cy="4" r="2"/><path d="M9 22l2-6 2.5 2 2-7M7.5 12.5l1.5-4 4 1 1.5 2.5 3-1"/>',
       };
       return el('button', {
         class: 'action-tile' + (isToday ? ' today' : ''),
@@ -1439,6 +1439,58 @@
             }
           },
         }, 'Log run'),
+      ]));
+    }
+
+    async function renderWalk(app) {
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Log Walk'),
+        el('span', { class: 'date' }, fmtDateLong(new Date())),
+      ]));
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'walkDate', type: 'date', value: todayISO() })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'walkDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '2.0' })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Time'),
+          el('div', { class: 'time-row' }, [
+            el('input', { id: 'walkMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+            el('div', { class: 'sep' }, ':'),
+            el('input', { id: 'walkSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+          ]),
+          el('div', { class: 'time-sub' }, [
+            el('div', {}, 'min'),
+            el('div', {}, ''),
+            el('div', {}, 'sec'),
+          ]),
+        ]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'walkNotes', type: 'text', placeholder: 'Outside, easy, etc.' })]),
+        el('button', {
+          onclick: async () => {
+            const date = $('#walkDate').value;
+            const distance = Number($('#walkDist').value);
+            const minRaw = $('#walkMin').value.trim();
+            const secRaw = $('#walkSec').value.trim();
+            const notes = $('#walkNotes').value.trim();
+            if (!date || !distance || (minRaw === '' && secRaw === '')) {
+              return toast('Date, distance, and time required', true);
+            }
+            const mm = String(Number(minRaw) || 0).padStart(2, '0');
+            const ss = String(Number(secRaw) || 0).padStart(2, '0');
+            const normalized = `${mm}:${ss}:00`;
+            const payload = { walk: { date, distance, time: normalized, notes } };
+            try {
+              const res = await api('logWalk', {}, payload);
+              if (res.duplicate) toast('Already logged — no duplicate added');
+              else toast('Walk logged!');
+              setTimeout(() => render('home'), 900);
+            } catch (e) {
+              queuePush({ action: 'logWalk', body: payload });
+              toast('Saved offline — will sync later');
+              setTimeout(() => render('home'), 900);
+            }
+          },
+        }, 'Log walk'),
       ]));
     }
 
