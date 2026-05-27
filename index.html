@@ -841,6 +841,235 @@
       }
     }
 
+    // -------- Supabase data helpers --------
+
+    function weekBounds() {
+      const now = new Date();
+      const day = now.getDay(); // 0=Sun
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      return { start: fmt(monday), end: fmt(sunday) };
+    }
+
+    function paceToSecs(p) {
+      if (!p) return null;
+      const parts = p.split(':').map(Number);
+      if (parts.length !== 2 || parts.some(isNaN)) return null;
+      return parts[0] * 60 + parts[1];
+    }
+
+    function secsToMMSS(s) {
+      if (!s || s <= 0) return '—';
+      const m = Math.floor(s / 60), sec = Math.round(s % 60);
+      return `${m}:${String(sec).padStart(2, '0')}`;
+    }
+
+    async function sbStats() {
+      const uid = currentUser.id;
+      const now = new Date();
+      const { start: weekStart, end: weekEnd } = weekBounds();
+      const yearStart = `${now.getFullYear()}-01-01`;
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+      const [weekRunsR, ytdRunsR, monthRunsR, weekLiftsR, weekPuR] = await Promise.all([
+        _sb.from('runs').select('distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('runs').select('distance').eq('user_id', uid).gte('date', yearStart),
+        _sb.from('runs').select('distance').eq('user_id', uid).gte('date', monthStart),
+        _sb.from('lift_sessions').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('pullup_sessions').select('total_reps').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+      ]);
+      const sumDist = arr => (arr || []).reduce((s, r) => s + Number(r.distance || 0), 0);
+      return {
+        runs: {
+          week:      Math.round(sumDist(weekRunsR.data)  * 10) / 10,
+          year:      Math.round(sumDist(ytdRunsR.data)   * 10) / 10,
+          yearCount: (ytdRunsR.data  || []).length,
+          month:     Math.round(sumDist(monthRunsR.data) * 10) / 10,
+        },
+        lifts:   { weekSessions: (weekLiftsR.data || []).length },
+        pullups: {
+          weekSessions: (weekPuR.data || []).length,
+          weekReps:     (weekPuR.data || []).reduce((s, p) => s + (p.total_reps || 0), 0),
+        },
+      };
+    }
+
+    async function sbShoes() {
+      const { data, error } = await _sb.from('shoe_mileage').select('*').eq('user_id', currentUser.id);
+      if (error) throw new Error(error.message);
+      return (data || []).map(s => ({
+        id: s.id, name: s.name, active: s.active,
+        totalMiles: Math.round(Number(s.total_miles) * 10) / 10,
+        newMiles:   Math.round(Number(s.logged_miles) * 10) / 10,
+      }));
+    }
+
+    async function sbLogRun(run) {
+      const uid = currentUser.id;
+      const parts = (run.time || '').split(':');
+      const dur = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
+      const pace = (dur > 0 && run.distance > 0) ? secsToMMSS(dur / run.distance) : null;
+      let shoe_id = null;
+      if (run.shoe) {
+        const { data: sd } = await _sb.from('shoes').select('id').eq('user_id', uid).eq('name', run.shoe).maybeSingle();
+        if (sd) shoe_id = sd.id;
+      }
+      const { data: dup } = await _sb.from('runs').select('id').eq('user_id', uid).eq('date', run.date).eq('distance', String(run.distance)).limit(1);
+      if (dup && dup.length) return { duplicate: true, pace };
+      const { error } = await _sb.from('runs').insert({ user_id: uid, date: run.date, distance: run.distance, duration_secs: dur || null, pace, notes: run.notes || null, shoe_id });
+      if (error) throw new Error(error.message);
+      return { duplicate: false, pace: pace || '?' };
+    }
+
+    async function sbLogWalk(walk) {
+      const uid = currentUser.id;
+      const parts = (walk.time || '').split(':');
+      const dur = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
+      const { data: dup } = await _sb.from('walks').select('id').eq('user_id', uid).eq('date', walk.date).eq('distance', String(walk.distance)).limit(1);
+      if (dup && dup.length) return { duplicate: true };
+      const { error } = await _sb.from('walks').insert({ user_id: uid, date: walk.date, distance: walk.distance, duration_secs: dur || null, notes: walk.notes || null });
+      if (error) throw new Error(error.message);
+      return { duplicate: false };
+    }
+
+    async function sbLogPullUps(session) {
+      const uid = currentUser.id;
+      const setsArr = [session.s1, session.s2, session.s3, session.s4, session.s5];
+      const total = setsArr.filter(v => v !== '' && v != null).reduce((s, n) => s + (Number(n) || 0), 0);
+      const { data: dup } = await _sb.from('pullup_sessions').select('id').eq('user_id', uid).eq('date', session.date).limit(1);
+      if (dup && dup.length) return { duplicate: true, total };
+      const { error } = await _sb.from('pullup_sessions').insert({ user_id: uid, date: session.date, sets: setsArr, total_reps: total, notes: session.notes || null });
+      if (error) throw new Error(error.message);
+      return { duplicate: false, total };
+    }
+
+    async function sbRecentPullUps(limit = 5) {
+      const { data, error } = await _sb.from('pullup_sessions').select('date,sets,total_reps,notes').eq('user_id', currentUser.id).order('date', { ascending: false }).limit(limit);
+      if (error) throw new Error(error.message);
+      return (data || []).map(p => {
+        const sets = Array.isArray(p.sets) ? p.sets : [];
+        return { date: p.date, total: p.total_reps || 0, s1: sets[0], s2: sets[1], s3: sets[2], s4: sets[3], s5: sets[4], weight: 'BW', week: null };
+      });
+    }
+
+    async function sbLogLift(entries, meta) {
+      const uid = currentUser.id;
+      const { data: dup } = await _sb.from('lift_sessions').select('id').eq('user_id', uid).eq('date', meta.date).eq('block_name', meta.block).eq('day', meta.day).limit(1);
+      if (dup && dup.length) return { duplicate: true };
+      const { error } = await _sb.from('lift_sessions').insert({ user_id: uid, date: meta.date, block_name: meta.block, week: meta.week, day: meta.day, exercises: entries, notes: meta.notes || null });
+      if (error) throw new Error(error.message);
+      return { duplicate: false };
+    }
+
+    async function sbAnalytics(yearFilter) {
+      const uid = currentUser.id;
+      let q = _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).order('date');
+      if (yearFilter !== 'all') q = q.gte('date', `${yearFilter}-01-01`).lte('date', `${yearFilter}-12-31`);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const runs = data || [];
+      const totalMi = runs.reduce((s, r) => s + Number(r.distance), 0);
+      const yearSet = new Set(runs.map(r => Number(r.date.slice(0, 4))));
+      const availableYears = [...yearSet].sort((a, b) => b - a);
+      const pRuns = runs.filter(r => r.pace);
+      let avgPaceSecs = null;
+      if (pRuns.length) {
+        const td = pRuns.reduce((s, r) => s + Number(r.distance), 0);
+        const wp = pRuns.reduce((s, r) => { const ps = paceToSecs(r.pace); return s + (ps ? ps * Number(r.distance) : 0); }, 0);
+        avgPaceSecs = td > 0 ? wp / td : null;
+      }
+      const tRuns = runs.filter(r => r.duration_secs);
+      const avgTimeMins = tRuns.length ? Math.round(tRuns.reduce((s, r) => s + r.duration_secs, 0) / tRuns.length / 60) : 0;
+      const summary = {
+        miles: Math.round(totalMi * 10) / 10,
+        runs: runs.length,
+        avgPace: avgPaceSecs ? secsToMMSS(avgPaceSecs) : '—',
+        avgDistance: runs.length ? Math.round((totalMi / runs.length) * 100) / 100 : 0,
+        avgTimeMinutes: avgTimeMins,
+      };
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      let monthly = [];
+      if (yearFilter !== 'all') {
+        for (let m = 0; m < 12; m++) {
+          const mr = runs.filter(r => Number(r.date.slice(5, 7)) - 1 === m);
+          const mi = mr.reduce((s, r) => s + Number(r.distance), 0);
+          const mpr = mr.filter(r => r.pace);
+          let mAvgPace = null;
+          if (mpr.length) {
+            const md = mpr.reduce((s, r) => s + Number(r.distance), 0);
+            const mwp = mpr.reduce((s, r) => { const ps = paceToSecs(r.pace); return s + (ps ? ps * Number(r.distance) : 0); }, 0);
+            mAvgPace = md > 0 ? secsToMMSS(mwp / md) : null;
+          }
+          monthly.push({ label: monthNames[m], miles: Math.round(mi * 10) / 10, runs: mr.length, avgDistance: mr.length ? Math.round((mi / mr.length) * 100) / 100 : 0, avgPace: mAvgPace || '—' });
+        }
+      }
+      const yearMap = {};
+      runs.forEach(r => { const y = r.date.slice(0, 4); yearMap[y] = (yearMap[y] || 0) + Number(r.distance); });
+      const yearly = Object.entries(yearMap).map(([year, miles]) => ({ year, miles: Math.round(miles * 10) / 10 })).sort((a, b) => Number(a.year) - Number(b.year));
+      return { filter: yearFilter, availableYears, summary, monthly, yearly };
+    }
+
+    async function sbMonth(year, month) {
+      const uid = currentUser.id;
+      const pad = n => String(n).padStart(2, '0');
+      const startDate = `${year}-${pad(month)}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const endDate = `${year}-${pad(month)}-${pad(lastDay)}`;
+      const [runsR, liftsR, pullsR] = await Promise.all([
+        _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('lift_sessions').select('date,block_name,week,day').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('pullup_sessions').select('date,total_reps').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+      ]);
+      const runByDate = {}; (runsR.data || []).forEach(r => { runByDate[r.date] = r; });
+      const liftByDate = {}; (liftsR.data || []).forEach(l => { liftByDate[l.date] = l; });
+      const pullByDate = {}; (pullsR.data || []).forEach(p => { pullByDate[p.date] = p; });
+      const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
+      const wdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const days = [];
+      for (let d = 1; d <= lastDay; d++) {
+        const ds = `${year}-${pad(month)}-${pad(d)}`;
+        const run = runByDate[ds], lift = liftByDate[ds], pull = pullByDate[ds];
+        const dow = new Date(year, month - 1, d).getDay();
+        days.push({
+          date: ds, day: d, weekday: wdays[dow],
+          run:    run  ? { distance: Math.round(Number(run.distance)*100)/100, time: run.duration_secs ? `${Math.floor(run.duration_secs/60)}:${String(run.duration_secs%60).padStart(2,'0')}:00` : '', pace: run.pace || '' } : null,
+          lift:   lift ? { block: lift.block_name, week: lift.week, day: lift.day } : null,
+          pullups:pull ? { total: pull.total_reps, weight: 'BW' } : null,
+        });
+      }
+      const mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      return { monthLabel: `${mNames[month-1]} ${year}`, firstDayOfWeek, days };
+    }
+
+    async function sbProfile() {
+      const uid = currentUser.id;
+      const [shoesR, runsR] = await Promise.all([
+        _sb.from('shoe_mileage').select('*').eq('user_id', uid),
+        _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).not('pace', 'is', null),
+      ]);
+      const shoes = (shoesR.data || []).map(s => ({ id: s.id, name: s.name, active: s.active, totalMiles: Math.round(Number(s.total_miles)*10)/10, newMiles: Math.round(Number(s.logged_miles)*10)/10 }));
+      const buckets = [
+        { label: '1 Mile',        min: 0.8,  max: 1.2  },
+        { label: '5K',            min: 2.8,  max: 3.5  },
+        { label: '4 Miles',       min: 3.5,  max: 4.5  },
+        { label: '10K',           min: 5.5,  max: 7.0  },
+        { label: '10 Miles',      min: 9.0,  max: 11.0 },
+        { label: 'Half Marathon', min: 12.5, max: 13.8 },
+      ];
+      const runs = runsR.data || [];
+      const bestEfforts = [];
+      buckets.forEach(b => {
+        const cands = runs.filter(r => Number(r.distance) >= b.min && Number(r.distance) <= b.max && r.pace);
+        if (!cands.length) return;
+        cands.sort((a, c) => (paceToSecs(a.pace) || 9999) - (paceToSecs(c.pace) || 9999));
+        const best = cands[0];
+        bestEfforts.push({ bucket: b.label, pace: best.pace, time: best.duration_secs ? `${Math.floor(best.duration_secs/60)}:${String(best.duration_secs%60).padStart(2,'0')}:00` : '', distance: Math.round(Number(best.distance)*100)/100, date: best.date });
+      });
+      return { shoes, bestEfforts };
+    }
+
     // -------- DOM helpers --------
     function $(sel, root = document) { return root.querySelector(sel); }
     function el(tag, attrs = {}, children = []) {
@@ -916,10 +1145,23 @@
           return stored;
         }
       } catch (e) {}
-      const cfg = await api('config');
-      programCache = { ...cfg, fetchedAt: Date.now() };
-      localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
-      return programCache;
+      // Try Supabase program_config first
+      try {
+        const { data, error } = await _sb.from('program_config').select('config').eq('user_id', currentUser.id).maybeSingle();
+        if (!error && data && data.config && data.config.blocks) {
+          programCache = { ...data.config, fetchedAt: Date.now() };
+          localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
+          return programCache;
+        }
+      } catch (e) {}
+      // Fall back to Apps Script if configured
+      if (getConfig().scriptUrl && getConfig().token) {
+        const cfg = await api('config');
+        programCache = { ...cfg, fetchedAt: Date.now() };
+        localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
+        return programCache;
+      }
+      throw new Error('Program config not available');
     }
 
     // -------- Auth UI --------
@@ -1012,8 +1254,6 @@
       app.innerHTML = '';
       selectorOpen = false;
 
-      if (!getConfig().scriptUrl || !getConfig().token) return renderSetup(app);
-
       if (view === 'home') await renderHome(app);
       else if (view === 'lift') await renderLift(app);
       else if (view === 'run') await renderRun(app);
@@ -1056,42 +1296,39 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
-      app.appendChild(skel);
-
-      let today;
+      // Load today's session context from cache or Apps Script (optional — graceful degradation)
+      let today = { sessionType: null };
       try {
-        today = await api('today');
-        todayCache = today;
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ today, savedAt: Date.now() }));
+        if (todayCache) {
+          today = todayCache;
+        } else {
+          const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+          if (cached && cached.today && (Date.now() - (cached.savedAt || 0) < 3600000)) {
+            today = cached.today;
+          } else if (getConfig().scriptUrl && getConfig().token) {
+            today = await api('today');
+            todayCache = today;
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ today, savedAt: Date.now() }));
+          }
+        }
       } catch (e) {
         try {
           const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-          if (cached) { today = cached.today; toast('Offline — using cached plan'); }
+          if (cached && cached.today) today = cached.today;
         } catch (_) {}
-        if (!today) {
-          skel.remove();
-          app.appendChild(el('div', { class: 'card' }, [
-            el('h2', {}, 'Offline'),
-            el('p', { class: 'muted' }, "Could not load today's plan. Logged entries will sync when you're back online."),
-          ]));
-          return;
-        }
       }
-      skel.remove();
 
-      // 3-way action grid: Lift / Run / Pull-Ups. Highlights today's scheduled type.
+      // Action grid — highlights today's scheduled type if known
       const todayKind = today.sessionType === 'lift' ? 'lift'
-                     : today.sessionType === 'run' ? 'run' : null;
+                      : today.sessionType === 'run'  ? 'run' : null;
       const grid = el('div', { class: 'action-grid' }, [
-        actionTile_('lift', 'Lift', todayKind === 'lift'),
-        actionTile_('run', 'Run', todayKind === 'run'),
+        actionTile_('lift',    'Lift',     todayKind === 'lift'),
+        actionTile_('run',     'Run',      todayKind === 'run'),
         actionTile_('pullups', 'Pull-Ups', false),
-        actionTile_('walk', 'Walk', false),
+        actionTile_('walk',    'Walk',     false),
       ]);
       app.appendChild(grid);
 
-      // Subtle today label
       if (today.sessionType === 'lift' && today.blockName) {
         app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
           `${today.blockName} · Week ${today.programWeek} · Day ${today.liftDay} — ${dayTitle(today.liftDay)}`));
@@ -1099,17 +1336,13 @@
         app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
           'Today: rest'));
       }
-      if (today.templateError) {
-        app.appendChild(el('div', { class: 'card', style: 'border-color: var(--warn);' }, [
-          el('div', { style: 'font-size: 13px; color: var(--warn);' },
-            'Could not load lift template: ' + today.templateError),
-          el('div', { class: 'muted', style: 'margin-top: 4px; font-size: 12px;' },
-            'Likely cause: BLOCKS tab names in Code.gs don\'t match your sheet (en-dash vs hyphen).'),
-        ]));
-      }
 
+      // Stats from Supabase
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
+      app.appendChild(skel);
       try {
-        const stats = await api('stats');
+        const stats = await sbStats();
+        skel.remove();
         app.appendChild(el('div', { class: 'stat-grid' }, [
           el('div', { class: 'card' }, [el('h2', {}, 'Miles this week'), el('div', { class: 'big' }, String(stats.runs.week))]),
           el('div', { class: 'card' }, [
@@ -1119,8 +1352,8 @@
           ]),
         ]));
         const liftWk = stats.lifts ? stats.lifts.weekSessions : 0;
-        const puWk = stats.pullups ? stats.pullups.weekSessions : 0;
-        const puReps = stats.pullups ? stats.pullups.weekReps : 0;
+        const puWk   = stats.pullups ? stats.pullups.weekSessions : 0;
+        const puReps  = stats.pullups ? stats.pullups.weekReps : 0;
         app.appendChild(el('div', { class: 'stat-grid' }, [
           el('div', { class: 'card' }, [
             el('h2', {}, 'Lift sessions'),
@@ -1138,7 +1371,9 @@
           el('div', { class: 'big' }, String(stats.runs.month)),
           el('div', { class: 'muted' }, 'miles run'),
         ]));
-      } catch (e) {}
+      } catch (e) {
+        skel.remove();
+      }
     }
 
     function dayTitle(d) {
@@ -1172,16 +1407,22 @@
       app.appendChild(skel);
 
       // Load program config (cached) + today (for auto defaults)
-      let prog, today;
+      let prog = null;
+      let today = { liftDay: 'A', blockName: null, programWeek: 1 };
+      try { prog = await loadProgram(); } catch (e) {}
       try {
-        [prog, today] = await Promise.all([loadProgram(), todayCache ? Promise.resolve(todayCache) : api('today')]);
-        todayCache = today;
-      } catch (e) {
-        skel.remove();
-        app.appendChild(el('div', { class: 'card' }, 'Offline — need network to fetch program / template.'));
+        if (!todayCache && getConfig().scriptUrl && getConfig().token) todayCache = await api('today');
+        if (todayCache) today = todayCache;
+      } catch (e) {}
+      skel.remove();
+
+      if (!prog) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No program config'),
+          el('p', { class: 'muted', style: 'font-size: 14px;' }, 'Program config not found. Configure it via Apps Script or Supabase to use the lift logger.'),
+        ]));
         return;
       }
-      skel.remove();
 
       // Initialize liftSelection from today's auto-detected slot if not set.
       if (!liftSelection) {
@@ -1266,6 +1507,14 @@
         exContainer.innerHTML = '';
         const loading = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
         exContainer.appendChild(loading);
+        if (!getConfig().scriptUrl || !getConfig().token) {
+          loading.remove();
+          exContainer.appendChild(el('div', { class: 'card' }, [
+            el('p', { class: 'muted', style: 'font-size: 14px;' }, 'Exercise templates require Apps Script. Configure it in Setup to load your exercise list.'),
+            el('button', { onclick: () => render('setup'), style: 'margin-top: 12px;' }, 'Go to Setup'),
+          ]));
+          return;
+        }
         let tpl;
         try {
           tpl = await api('template', { block: liftSelection.block, week: liftSelection.week, day: liftSelection.day });
@@ -1361,14 +1610,12 @@
               notes: ($('#liftSessionNotes').value || '').trim(),
             };
             try {
-              const res = await api('logLift', {}, { entries, meta });
+              const res = await sbLogLift(entries, meta);
               if (res.duplicate) toast('Already logged this session');
               else toast('Saved to Lift Log');
               setTimeout(() => render('home'), 900);
             } catch (e) {
-              queuePush({ action: 'logLift', body: { entries, meta } });
-              toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 900);
+              toast('Could not save: ' + e.message, true);
             }
           },
         }, 'Save session'));
@@ -1386,7 +1633,7 @@
 
       // Pre-fetch shoes for the dropdown (best-effort; if offline, dropdown is empty)
       let shoes = [];
-      try { const r = await api('shoes'); shoes = (r.shoes || []).filter(s => s.active); } catch (e) {}
+      try { const allShoes = await sbShoes(); shoes = allShoes.filter(s => s.active); } catch (e) {}
 
       const shoeOptions = [el('option', { value: '' }, '— Select shoe —')]
         .concat(shoes.map(s => el('option', { value: s.name }, `${s.name} (${s.totalMiles} mi)`)));
@@ -1426,16 +1673,13 @@
             const mm = String(Number(minRaw) || 0).padStart(2, '0');
             const ss = String(Number(secRaw) || 0).padStart(2, '0');
             const normalized = `${mm}:${ss}:00`;
-            const payload = { run: { date, distance, time: normalized, notes, shoe } };
             try {
-              const res = await api('logRun', {}, payload);
+              const res = await sbLogRun({ date, distance, time: normalized, notes, shoe });
               if (res.duplicate) toast('Already logged — no duplicate added');
               else toast('Logged · ' + res.pace + '/mi');
               setTimeout(() => render('home'), 900);
             } catch (e) {
-              queuePush({ action: 'logRun', body: payload });
-              toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 900);
+              toast('Could not save: ' + e.message, true);
             }
           },
         }, 'Log run'),
@@ -1478,16 +1722,13 @@
             const mm = String(Number(minRaw) || 0).padStart(2, '0');
             const ss = String(Number(secRaw) || 0).padStart(2, '0');
             const normalized = `${mm}:${ss}:00`;
-            const payload = { walk: { date, distance, time: normalized, notes } };
             try {
-              const res = await api('logWalk', {}, payload);
+              const res = await sbLogWalk({ date, distance, time: normalized, notes });
               if (res.duplicate) toast('Already logged — no duplicate added');
               else toast('Walk logged!');
               setTimeout(() => render('home'), 900);
             } catch (e) {
-              queuePush({ action: 'logWalk', body: payload });
-              toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 900);
+              toast('Could not save: ' + e.message, true);
             }
           },
         }, 'Log walk'),
@@ -1500,18 +1741,17 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      let prog, today;
+      let prog = null;
+      let today = { pullUpWeek: 1, pullUpPhase: null };
+      try { prog = await loadProgram(); } catch (e) {}
       try {
-        [prog, today] = await Promise.all([loadProgram(), todayCache ? Promise.resolve(todayCache) : api('today')]);
-        todayCache = today;
-      } catch (e) {
-        app.appendChild(el('div', { class: 'card' }, 'Offline — pull-up logging needs network for now.'));
-        return;
-      }
+        if (!todayCache && getConfig().scriptUrl && getConfig().token) todayCache = await api('today');
+        if (todayCache) today = todayCache;
+      } catch (e) {}
 
       const week = today.pullUpWeek || 1;
       const phase = today.pullUpPhase || phaseForWeek(week);
-      const phaseInfo = prog.pullUpPhases.find(p => p.name === phase) || {};
+      const phaseInfo = (prog && prog.pullUpPhases) ? (prog.pullUpPhases.find(p => p.name === phase) || {}) : {};
 
       app.appendChild(el('div', { class: 'card' }, [
         el('h2', {}, `Week ${week} · ${phase}`),
@@ -1563,14 +1803,12 @@
               weight, notes,
             };
             try {
-              const res = await api('logPullUps', {}, { session });
+              const res = await sbLogPullUps(session);
               if (res.duplicate) toast('Already logged today');
               else toast(`Saved · ${res.total} total reps`);
               setTimeout(() => render('home'), 900);
             } catch (e) {
-              queuePush({ action: 'logPullUps', body: { session } });
-              toast('Saved offline — will sync later');
-              setTimeout(() => render('home'), 900);
+              toast('Could not save: ' + e.message, true);
             }
           },
         }, 'Save pull-up session'),
@@ -1578,10 +1816,10 @@
 
       // Recent pull-up sessions
       try {
-        const recent = await api('recent', { limit: 5 });
-        if (recent.pullups && recent.pullups.length) {
+        const recentPullups = await sbRecentPullUps(5);
+        if (recentPullups.length) {
           const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent sessions')]);
-          recent.pullups.forEach(p => {
+          recentPullups.forEach(p => {
             list.appendChild(el('div', {
               style: 'padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;',
             }, [
@@ -1635,11 +1873,11 @@
       let data;
       try {
         const filter = analyticsYearFilter || String(new Date().getFullYear());
-        data = await api('analytics', { year: filter });
+        data = await sbAnalytics(filter);
         analyticsYearFilter = data.filter;
       } catch (e) {
         skel.remove();
-        app.appendChild(el('div', { class: 'card' }, 'Offline — analytics needs network.'));
+        app.appendChild(el('div', { class: 'card' }, 'Could not load analytics: ' + e.message));
         return;
       }
       skel.remove();
@@ -1753,8 +1991,8 @@
       app.appendChild(gridContainer);
 
       let data;
-      try { data = await api('month', { year: calendarMonth.year, month: calendarMonth.month }); }
-      catch (e) { gridContainer.innerHTML = ''; gridContainer.appendChild(el('div', { class: 'card' }, 'Offline — calendar needs network.')); return; }
+      try { data = await sbMonth(calendarMonth.year, calendarMonth.month); }
+      catch (e) { gridContainer.innerHTML = ''; gridContainer.appendChild(el('div', { class: 'card' }, 'Could not load calendar: ' + e.message)); return; }
 
       $('#calMonthLabel').textContent = data.monthLabel;
 
@@ -1854,8 +2092,8 @@
       app.appendChild(skel);
 
       let prof;
-      try { prof = await api('profile'); }
-      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Offline.')); return; }
+      try { prof = await sbProfile(); }
+      catch (e) { skel.remove(); app.appendChild(el('div', { class: 'card' }, 'Could not load profile: ' + e.message)); return; }
       skel.remove();
 
       // PR badges
