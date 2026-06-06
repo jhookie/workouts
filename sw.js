@@ -1,5 +1,5 @@
 // Simple offline-first service worker: cache shell, network-first for API.
-const CACHE = 'workouts-v11d';
+const CACHE = 'workouts-v13';
 const SHELL = [
   './',
   './index.html',

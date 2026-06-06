@@ -472,6 +472,47 @@
       font-weight: 700;
     }
 
+    /* Weekly goals card */
+    .goal-row {
+      margin-top: 14px;
+    }
+    .goal-row:first-of-type { margin-top: 10px; }
+    .goal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .goal-label {
+      font-size: 14px;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .goal-count {
+      font-size: 13px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .goal-count.hit {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .goal-bar {
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .goal-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 4px;
+      transition: width 240ms ease;
+    }
+    .goal-fill.hit {
+      background: linear-gradient(90deg, var(--accent), #7affb7);
+    }
+
     /* Year filter segmented */
     .seg {
       display: flex;
@@ -884,6 +925,7 @@
       return {
         runs: {
           week:      Math.round(sumDist(weekRunsR.data)  * 10) / 10,
+          weekCount: (weekRunsR.data || []).length,
           year:      Math.round(sumDist(ytdRunsR.data)   * 10) / 10,
           yearCount: (ytdRunsR.data  || []).length,
           month:     Math.round(sumDist(monthRunsR.data) * 10) / 10,
@@ -904,6 +946,18 @@
         totalMiles: Math.round(Number(s.total_miles) * 10) / 10,
         newMiles:   Math.round(Number(s.logged_miles) * 10) / 10,
       }));
+    }
+
+    async function sbAddShoe({ name, active, initialMiles }) {
+      const uid = currentUser.id;
+      const { error } = await _sb.from('shoes').insert({
+        user_id:       uid,
+        name:          name,
+        active:        !!active,
+        initial_miles: Number(initialMiles) || 0,
+      });
+      if (error) throw new Error(error.message);
+      return { ok: true };
     }
 
     async function sbLogRun(run) {
@@ -1296,46 +1350,15 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      // Load today's session context from cache or Apps Script (optional — graceful degradation)
-      let today = { sessionType: null };
-      try {
-        if (todayCache) {
-          today = todayCache;
-        } else {
-          const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-          if (cached && cached.today && (Date.now() - (cached.savedAt || 0) < 3600000)) {
-            today = cached.today;
-          } else if (getConfig().scriptUrl && getConfig().token) {
-            today = await api('today');
-            todayCache = today;
-            localStorage.setItem(CACHE_KEY, JSON.stringify({ today, savedAt: Date.now() }));
-          }
-        }
-      } catch (e) {
-        try {
-          const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-          if (cached && cached.today) today = cached.today;
-        } catch (_) {}
-      }
-
-      // Action grid — highlights today's scheduled type if known
-      const todayKind = today.sessionType === 'lift' ? 'lift'
-                      : today.sessionType === 'run'  ? 'run' : null;
-      const grid = el('div', { class: 'action-grid' }, [
-        actionTile_('lift',    'Lift',     todayKind === 'lift'),
-        actionTile_('run',     'Run',      todayKind === 'run'),
+      // Action grid — all four tiles equal; no day-based highlighting.
+      // Jeff aims for 4 runs / 3 lifts per week on his own schedule, so
+      // pre-selecting one based on day-of-week stopped making sense.
+      app.appendChild(el('div', { class: 'action-grid' }, [
+        actionTile_('lift',    'Lift',     false),
+        actionTile_('run',     'Run',      false),
         actionTile_('pullups', 'Pull-Ups', false),
         actionTile_('walk',    'Walk',     false),
-      ]);
-      app.appendChild(grid);
-
-      if (today.sessionType === 'lift' && today.blockName) {
-        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
-          `${today.blockName} · Week ${today.programWeek} · Day ${today.liftDay} — ${dayTitle(today.liftDay)}`));
-      } else if (today.sessionType === 'rest') {
-        app.appendChild(el('div', { class: 'muted', style: 'text-align: center; margin: -4px 0 14px; font-size: 13px;' },
-          'Today: rest'));
-      }
+      ]));
 
       // Stats from Supabase
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
@@ -1343,37 +1366,65 @@
       try {
         const stats = await sbStats();
         skel.remove();
+
+        // ── Weekly goals card (the main scoreboard) ──────────
+        const runCount  = stats.runs  ? (stats.runs.weekCount || 0)    : 0;
+        const liftCount = stats.lifts ? (stats.lifts.weekSessions || 0) : 0;
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Weekly goals'),
+          goalRow_('Runs',  runCount,  WEEKLY_RUN_GOAL),
+          goalRow_('Lifts', liftCount, WEEKLY_LIFT_GOAL),
+        ]));
+
+        // ── Mileage stats ─────────────────────────────────────
         app.appendChild(el('div', { class: 'stat-grid' }, [
-          el('div', { class: 'card' }, [el('h2', {}, 'Miles this week'), el('div', { class: 'big' }, String(stats.runs.week))]),
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Miles this week'),
+            el('div', { class: 'big' }, String(stats.runs.week)),
+          ]),
           el('div', { class: 'card' }, [
             el('h2', {}, 'Miles YTD'),
             el('div', { class: 'big' }, String(stats.runs.year)),
             el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
           ]),
         ]));
-        const liftWk = stats.lifts ? stats.lifts.weekSessions : 0;
+
+        // ── Pull-ups + month mileage ──────────────────────────
         const puWk   = stats.pullups ? stats.pullups.weekSessions : 0;
-        const puReps  = stats.pullups ? stats.pullups.weekReps : 0;
+        const puReps = stats.pullups ? stats.pullups.weekReps : 0;
         app.appendChild(el('div', { class: 'stat-grid' }, [
           el('div', { class: 'card' }, [
-            el('h2', {}, 'Lift sessions'),
-            el('div', { class: 'big' }, String(liftWk)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'Mon–Sun'),
+            el('h2', {}, 'Pull-Ups'),
+            el('div', { class: 'big' }, String(puWk)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${puReps} reps this week`),
           ]),
           el('div', { class: 'card' }, [
-            el('h2', {}, 'Pull-Up sessions'),
-            el('div', { class: 'big' }, String(puWk)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${puReps} reps · Mon–Sun`),
+            el('h2', {}, 'This month'),
+            el('div', { class: 'big' }, String(stats.runs.month)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'miles run'),
           ]),
-        ]));
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'This month'),
-          el('div', { class: 'big' }, String(stats.runs.month)),
-          el('div', { class: 'muted' }, 'miles run'),
         ]));
       } catch (e) {
         skel.remove();
       }
+    }
+
+    // Weekly targets. Hardcoded for now — easy to lift into user_profiles later.
+    const WEEKLY_RUN_GOAL  = 4;
+    const WEEKLY_LIFT_GOAL = 3;
+
+    function goalRow_(label, done, goal) {
+      const pct = Math.min(100, Math.round((done / goal) * 100));
+      const isHit = done >= goal;
+      return el('div', { class: 'goal-row' }, [
+        el('div', { class: 'goal-head' }, [
+          el('span', { class: 'goal-label' }, label),
+          el('span', { class: 'goal-count' + (isHit ? ' hit' : '') }, `${done} / ${goal}`),
+        ]),
+        el('div', { class: 'goal-bar' }, [
+          el('div', { class: 'goal-fill' + (isHit ? ' hit' : ''), style: `width: ${pct}%;` }),
+        ]),
+      ]);
     }
 
     function dayTitle(d) {
@@ -2114,29 +2165,84 @@
         ]));
       }
 
-      // Shoes
-      if (prof.shoes && prof.shoes.length) {
+      // Shoes — always render the card so the "Add shoe" button is reachable
+      // even when no shoes exist yet.
+      {
         const card = el('div', { class: 'card' }, [el('h2', {}, 'Shoes')]);
-        prof.shoes.filter(s => s.active).forEach(s => {
-          const mi = s.totalMiles || 0;
-          const cls = mi > 450 ? 'danger' : (mi > 300 ? 'warn' : '');
-          const pct = Math.min(100, (mi / 500) * 100);
-          card.appendChild(el('div', { class: 'shoe-card' }, [
-            el('div', { class: 'shoe-name' }, s.name),
-            el('div', { class: 'shoe-brand' }, s.brand || ''),
-            el('div', { class: 'shoe-miles-row' }, [
-              el('div', { class: 'shoe-miles ' + cls }, String(mi) + ' mi'),
-              el('div', { class: 'muted', style: 'font-size: 11px;' },
-                `+${s.newMiles || 0} since start`),
-            ]),
-            el('div', { class: 'shoe-bar' }, [el('div', { class: 'shoe-bar-fill ' + cls, style: `width: ${pct}%;` })]),
-          ]));
-        });
-        const retired = prof.shoes.filter(s => !s.active);
+        const shoes = prof.shoes || [];
+        const active = shoes.filter(s => s.active);
+        const retired = shoes.filter(s => !s.active);
+
+        if (active.length) {
+          active.forEach(s => {
+            const mi = s.totalMiles || 0;
+            const cls = mi > 450 ? 'danger' : (mi > 300 ? 'warn' : '');
+            const pct = Math.min(100, (mi / 500) * 100);
+            card.appendChild(el('div', { class: 'shoe-card' }, [
+              el('div', { class: 'shoe-name' }, s.name),
+              el('div', { class: 'shoe-brand' }, s.brand || ''),
+              el('div', { class: 'shoe-miles-row' }, [
+                el('div', { class: 'shoe-miles ' + cls }, String(mi) + ' mi'),
+                el('div', { class: 'muted', style: 'font-size: 11px;' },
+                  `+${s.newMiles || 0} since start`),
+              ]),
+              el('div', { class: 'shoe-bar' }, [el('div', { class: 'shoe-bar-fill ' + cls, style: `width: ${pct}%;` })]),
+            ]));
+          });
+        } else {
+          card.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin: 8px 0;' },
+            'No active shoes yet. Add one below to start tracking mileage.'));
+        }
+
         if (retired.length) {
           card.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px;' },
             `Retired: ${retired.map(r => r.name).join(', ')}`));
         }
+
+        // Add-shoe form (collapsed by default; expand on button tap)
+        const formWrap = el('div', { id: 'addShoeForm', style: 'display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);' });
+        const nameI    = el('input', { id: 'newShoeName',   type: 'text',   placeholder: 'e.g. Nike Pegasus 41' });
+        const milesI   = el('input', { id: 'newShoeMiles',  type: 'number', step: '1', inputmode: 'numeric', placeholder: '0', value: '0' });
+        const activeCk = el('input', { id: 'newShoeActive', type: 'checkbox' });
+        activeCk.checked = true;
+
+        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Shoe name'),         nameI]));
+        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Existing miles'),    milesI]));
+        formWrap.appendChild(el('div', {
+          class: 'field',
+          style: 'display: flex; align-items: center; gap: 8px;',
+        }, [
+          activeCk,
+          el('label', { for: 'newShoeActive', style: 'margin: 0; font-size: 14px;' }, 'Active (uncheck to add as retired)'),
+        ]));
+        formWrap.appendChild(el('button', {
+          onclick: async () => {
+            const name = nameI.value.trim();
+            if (!name) return toast('Name required', true);
+            const miles = Number(milesI.value) || 0;
+            try {
+              await sbAddShoe({ name, active: activeCk.checked, initialMiles: miles });
+              toast('Shoe added');
+              render('profile');
+            } catch (e) {
+              toast('Could not save: ' + e.message, true);
+            }
+          },
+        }, 'Save shoe'));
+
+        const addBtn = el('button', {
+          style: 'margin-top: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          onclick: () => {
+            const wrap = $('#addShoeForm');
+            const show = wrap.style.display === 'none';
+            wrap.style.display = show ? 'block' : 'none';
+            addBtn.textContent = show ? 'Cancel' : '+ Add shoe';
+            if (show) nameI.focus();
+          },
+        }, '+ Add shoe');
+
+        card.appendChild(addBtn);
+        card.appendChild(formWrap);
         app.appendChild(card);
       }
 
