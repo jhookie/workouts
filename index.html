@@ -472,6 +472,119 @@
       font-weight: 700;
     }
 
+    /* Lift session detail */
+    .session-ex {
+      padding: 14px 16px;
+    }
+    .session-ex-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .session-ex-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .session-ex-stats {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 0.8fr;
+      gap: 12px;
+    }
+    .session-stat-val {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Programs tab */
+    .section-h {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 18px 0 8px 4px;
+    }
+    .section-h:first-child { margin-top: 6px; }
+    .program-card {
+      cursor: pointer;
+      transition: border-color 120ms ease;
+    }
+    .program-card:active { border-color: var(--accent); }
+    .program-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .program-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .program-badge {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .program-badge.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .program-badge.archived {
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .week-card { padding: 0 !important; overflow: hidden; }
+    .week-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      padding: 14px 16px;
+      background: transparent;
+      color: var(--text);
+      border: none;
+      text-align: left;
+      cursor: pointer;
+    }
+    .week-num {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .week-body {
+      display: none;
+      padding: 0 16px 14px;
+      border-top: 1px solid var(--border);
+    }
+    .week-card.open .week-body { display: block; }
+    .day-block { margin-top: 14px; }
+    .day-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .ex-row {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .ex-row:last-child { border-bottom: none; }
+    .ex-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
     /* Weekly goals card */
     .goal-row {
       margin-top: 14px;
@@ -821,6 +934,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16V9M12 16v-4M16 16V7M20 19V5"/></svg>
       Analytics
     </button>
+    <button data-view="programs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v4H4zM4 12h16v4H4zM4 20h10v0"/><circle cx="18" cy="20" r="2"/></svg>
+      Programs
+    </button>
     <button data-view="profile">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
       Profile
@@ -958,6 +1075,87 @@
       });
       if (error) throw new Error(error.message);
       return { ok: true };
+    }
+
+    // -------- Programs --------
+    async function sbListPrograms() {
+      const uid = currentUser.id;
+      const { data, error } = await _sb
+        .from('programs')
+        .select('id,name,notes,active,archived_at,structure,created_at')
+        .eq('user_id', uid)
+        .order('active', { ascending: false })
+        .order('archived_at', { ascending: true, nullsFirst: true })
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return (data || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        notes: p.notes,
+        active: !!p.active,
+        archived: !!p.archived_at,
+        archivedAt: p.archived_at,
+        createdAt: p.created_at,
+        structure: p.structure,
+      }));
+    }
+
+    async function sbGetProgram(id) {
+      const { data, error } = await _sb
+        .from('programs').select('*').eq('id', id).single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    async function sbActivateProgram(id) {
+      const uid = currentUser.id;
+      // Step 1: deactivate everything else first
+      const r1 = await _sb.from('programs').update({ active: false })
+        .eq('user_id', uid).neq('id', id);
+      if (r1.error) throw new Error(r1.error.message);
+      // Step 2: activate this one (and un-archive if archived)
+      const r2 = await _sb.from('programs').update({ active: true, archived_at: null })
+        .eq('id', id);
+      if (r2.error) throw new Error(r2.error.message);
+      return { ok: true };
+    }
+
+    async function sbArchiveProgram(id) {
+      const { error } = await _sb.from('programs')
+        .update({ active: false, archived_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    async function sbDeleteProgram(id) {
+      const { error } = await _sb.from('programs').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    // Returns the currently active program for the lift logger to render from.
+    // Cached locally so the logger doesn't re-fetch on every open.
+    let _activeProgramCache = null;
+    let _activeProgramCacheAt = 0;
+    const ACTIVE_PROGRAM_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+    async function sbActiveProgram(force = false) {
+      if (!force && _activeProgramCache && (Date.now() - _activeProgramCacheAt) < ACTIVE_PROGRAM_TTL_MS) {
+        return _activeProgramCache;
+      }
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('programs')
+        .select('*').eq('user_id', uid).eq('active', true).is('archived_at', null).maybeSingle();
+      if (error) throw new Error(error.message);
+      _activeProgramCache = data || null;
+      _activeProgramCacheAt = Date.now();
+      return _activeProgramCache;
+    }
+
+    function invalidateActiveProgramCache() {
+      _activeProgramCache = null;
+      _activeProgramCacheAt = 0;
     }
 
     async function sbLogRun(run) {
@@ -1192,6 +1390,20 @@
 
     async function loadProgram() {
       if (programCache) return programCache;
+
+      // PREFERRED: derive blocks from the active program in the new Programs
+      // tab. This is the path going forward (v14+); the rest are legacy.
+      try {
+        const ap = await sbActiveProgram();
+        if (ap && ap.structure && Array.isArray(ap.structure.weeks)) {
+          const cfg = deriveBlocksFromProgram_(ap);
+          programCache = { ...cfg, fetchedAt: Date.now(), source: 'programs' };
+          localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
+          return programCache;
+        }
+      } catch (e) { /* fall through */ }
+
+      // Then localStorage cache (last good config)
       try {
         const stored = JSON.parse(localStorage.getItem(PROG_KEY) || 'null');
         if (stored && stored.blocks && stored.fetchedAt && (Date.now() - stored.fetchedAt < 86400000)) {
@@ -1199,23 +1411,153 @@
           return stored;
         }
       } catch (e) {}
-      // Try Supabase program_config first
+
+      // Legacy: Supabase program_config
       try {
         const { data, error } = await _sb.from('program_config').select('config').eq('user_id', currentUser.id).maybeSingle();
         if (!error && data && data.config && data.config.blocks) {
-          programCache = { ...data.config, fetchedAt: Date.now() };
+          programCache = { ...data.config, fetchedAt: Date.now(), source: 'program_config' };
           localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
           return programCache;
         }
       } catch (e) {}
-      // Fall back to Apps Script if configured
+
+      // Legacy: Apps Script
       if (getConfig().scriptUrl && getConfig().token) {
         const cfg = await api('config');
-        programCache = { ...cfg, fetchedAt: Date.now() };
+        programCache = { ...cfg, fetchedAt: Date.now(), source: 'apps_script' };
         localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
         return programCache;
       }
       throw new Error('Program config not available');
+    }
+
+    // Turn an active program's `structure.weeks` into the { blocks: [...] }
+    // shape the lift selector UI expects. Groups consecutive weeks sharing a
+    // block_name into a single block span. Falls back to one block named after
+    // the program if no weeks have block_name set.
+    function deriveBlocksFromProgram_(program) {
+      const s = program.structure || {};
+      const weeks = s.weeks || [];
+      if (!weeks.length) {
+        return { blocks: [{ name: program.name, startWeek: 1, endWeek: s.weeks_total || 1 }] };
+      }
+      const blocks = [];
+      let cur = null;
+      weeks.forEach(w => {
+        const name = w.block_name || program.name;
+        if (!cur || cur.name !== name) {
+          if (cur) blocks.push(cur);
+          cur = { name, startWeek: w.week, endWeek: w.week };
+        } else {
+          cur.endWeek = w.week;
+        }
+      });
+      if (cur) blocks.push(cur);
+      return {
+        blocks,
+        weeksTotal: s.weeks_total || weeks.length,
+        dayLetters: s.day_letters || ['A', 'B', 'C'],
+        dayTitles: s.day_titles || {},
+      };
+    }
+
+    // Returns the exercise template for a given selection, plus prev-week
+    // prefill from lift_sessions. Tries the new Programs system first, then
+    // falls back to Apps Script if no program is active (transition aid).
+    async function loadLiftTemplate_(sel) {
+      // 1) Programs system
+      let exercises = null;
+      let source = 'none';
+      try {
+        const ap = await sbActiveProgram();
+        if (ap && ap.structure && Array.isArray(ap.structure.weeks)) {
+          const weekRow = ap.structure.weeks.find(w => Number(w.week) === Number(sel.week));
+          if (weekRow && weekRow.days && Array.isArray(weekRow.days[sel.day])) {
+            exercises = weekRow.days[sel.day].map(ex => ({
+              name:        ex.name,
+              sets:        ex.sets,
+              targetReps:  ex.target_reps,
+              category:    ex.category,
+              notes:       ex.notes || '',
+              sessionNotes: '',
+              prevWeight:  null,
+              prevTotal:   null,
+            }));
+            source = 'program';
+          }
+        }
+      } catch (e) { /* fall through to legacy */ }
+
+      // 2) Apps Script legacy (only if Programs path didn't produce a template)
+      if (!exercises && getConfig().scriptUrl && getConfig().token) {
+        try {
+          const tpl = await api('template', { block: sel.block, week: sel.week, day: sel.day });
+          if (tpl && Array.isArray(tpl.exercises)) {
+            exercises = tpl.exercises.map(ex => ({
+              name:        ex.name,
+              sets:        ex.sets,
+              targetReps:  ex.targetReps,
+              category:    ex.category,
+              notes:       ex.notes || '',
+              sessionNotes: ex.sessionNotes || '',
+              prevWeight:  ex.prevWeight != null ? ex.prevWeight : null,
+              prevTotal:   ex.prevTotal  != null ? ex.prevTotal  : (ex.previous != null ? ex.previous : null),
+            }));
+            source = 'apps_script';
+          }
+        } catch (e) { /* fall through */ }
+      }
+
+      if (!exercises) return { source: 'none', exercises: [] };
+
+      // Prev-week prefill from lift_sessions (works for both sources, and
+      // overrides Apps Script's prev values with what's actually in Supabase).
+      if (Number(sel.week) > 1) {
+        try {
+          const prev = await sbPrevWeekExercises_(Number(sel.week) - 1, sel.day);
+          exercises.forEach(ex => {
+            const match = prev[normalizeExName_(ex.name)];
+            if (match) {
+              ex.prevWeight = match.weight != null ? match.weight : ex.prevWeight;
+              ex.prevTotal  = match.total  != null ? match.total  : ex.prevTotal;
+            }
+          });
+        } catch (e) { /* prefill is best-effort */ }
+      }
+
+      return { source, exercises };
+    }
+
+    function normalizeExName_(s) {
+      return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    // Find the most recent lift_sessions row for (week, day) and return a
+    // map of exercise-name (normalized) → { weight, total }.
+    async function sbPrevWeekExercises_(prevWeek, day) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('date,exercises')
+        .eq('user_id', uid).eq('week', prevWeek).eq('day', day)
+        .order('date', { ascending: false })
+        .limit(1);
+      if (error) throw new Error(error.message);
+      const session = (data || [])[0];
+      if (!session || !Array.isArray(session.exercises)) return {};
+      const out = {};
+      session.exercises.forEach(ex => {
+        const r1 = Number(ex.r1) || 0;
+        const r2 = Number(ex.r2) || 0;
+        const r3 = Number(ex.r3) || 0;
+        const r4 = Number(ex.r4) || 0;
+        const total = r1 + r2 + r3 + r4;
+        out[normalizeExName_(ex.name)] = {
+          weight: (ex.weight === '' || ex.weight == null) ? null : ex.weight,
+          total:  total > 0 ? total : null,
+        };
+      });
+      return out;
     }
 
     // -------- Auth UI --------
@@ -1315,6 +1657,8 @@
       else if (view === 'walk') await renderWalk(app);
       else if (view === 'calendar') await renderCalendar(app);
       else if (view === 'analytics') await renderAnalytics(app);
+      else if (view === 'lift-session') await renderLiftSession(app);
+      else if (view === 'programs') await renderPrograms(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -1469,8 +1813,11 @@
 
       if (!prog) {
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'No program config'),
-          el('p', { class: 'muted', style: 'font-size: 14px;' }, 'Program config not found. Configure it via Apps Script or Supabase to use the lift logger.'),
+          el('h2', {}, 'No active program'),
+          el('p', { class: 'muted', style: 'font-size: 14px;' },
+            'Open the Programs tab and activate one to load exercise templates here.'),
+          el('button', { onclick: () => render('programs'), style: 'margin-top: 12px;' },
+            'Go to Programs'),
         ]));
         return;
       }
@@ -1558,23 +1905,28 @@
         exContainer.innerHTML = '';
         const loading = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
         exContainer.appendChild(loading);
-        if (!getConfig().scriptUrl || !getConfig().token) {
-          loading.remove();
-          exContainer.appendChild(el('div', { class: 'card' }, [
-            el('p', { class: 'muted', style: 'font-size: 14px;' }, 'Exercise templates require Apps Script. Configure it in Setup to load your exercise list.'),
-            el('button', { onclick: () => render('setup'), style: 'margin-top: 12px;' }, 'Go to Setup'),
-          ]));
-          return;
-        }
+
+        // v14+: read templates from the active Supabase program. Fall back to
+        // Apps Script only if no active program is set (covers users who
+        // haven't migrated yet).
         let tpl;
         try {
-          tpl = await api('template', { block: liftSelection.block, week: liftSelection.week, day: liftSelection.day });
+          tpl = await loadLiftTemplate_(liftSelection);
         } catch (e) {
           loading.remove();
           exContainer.appendChild(el('div', { class: 'card' }, 'Could not load template: ' + e.message));
           return;
         }
         loading.remove();
+
+        if (tpl.source === 'none') {
+          exContainer.appendChild(el('div', { class: 'card' }, [
+            el('p', { class: 'muted', style: 'font-size: 14px;' },
+              'No active program. Open the Programs tab and activate one to load exercise templates here.'),
+            el('button', { onclick: () => render('programs'), style: 'margin-top: 12px;' }, 'Go to Programs'),
+          ]));
+          return;
+        }
 
         if (!tpl.exercises.length) {
           exContainer.appendChild(el('div', { class: 'card' }, 'No exercises for this slot.'));
@@ -2103,6 +2455,13 @@
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #ff9b7a;' }, 'Lift'),
           el('div', { class: 'muted', style: 'font-size: 13px;' }, liftDesc),
+          el('button', {
+            style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
+            onclick: () => {
+              _liftSessionRef = { date: day.date, day: day.lift.day };
+              render('lift-session');
+            },
+          }, 'View session →'),
         ]));
       }
       if (day.run) {
@@ -2134,6 +2493,345 @@
       const m = String(s).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
       if (m && m[3] === '00') return `${m[1]}:${m[2]}`;
       return String(s);
+    }
+
+    // -------- Lift Session detail screen --------
+    let _liftSessionRef = null; // { date, day } set by Calendar tap
+
+    async function sbGetLiftSession(date, day) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('date,block_name,week,day,exercises,notes,created_at')
+        .eq('user_id', uid).eq('date', date).eq('day', day)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    async function renderLiftSession(app) {
+      const ref = _liftSessionRef;
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Lift session'),
+      ]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { _liftSessionRef = null; render('calendar'); },
+      }, '← Back to calendar'));
+
+      if (!ref) {
+        app.appendChild(el('div', { class: 'card' }, 'No session selected.'));
+        return;
+      }
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let session;
+      try { session = await sbGetLiftSession(ref.date, ref.day); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load session: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (!session) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No session found'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            `No lift session was logged for ${ref.date} Day ${ref.day}.`),
+        ]));
+        return;
+      }
+
+      // Header: date + block/week/day
+      const weekdayStr = new Date(session.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', { style: 'margin-bottom: 4px;' }, weekdayStr),
+        el('div', { class: 'muted', style: 'font-size: 13px;' },
+          `${session.block_name || '—'} · Week ${session.week ?? '—'} · Day ${session.day || '—'}`),
+        session.notes ? el('div', { style: 'margin-top: 10px; padding: 10px; background: var(--surface-2); border-radius: 8px; font-size: 13px; font-style: italic;' },
+          session.notes) : null,
+      ]));
+
+      const exercises = Array.isArray(session.exercises) ? session.exercises : [];
+      if (!exercises.length) {
+        app.appendChild(el('div', { class: 'card' }, 'No exercises recorded for this session.'));
+        return;
+      }
+
+      // Summary stats
+      let totalReps = 0;
+      let totalSets = 0;
+      exercises.forEach(ex => {
+        const setReps = [ex.r1, ex.r2, ex.r3, ex.r4]
+          .map(v => Number(v) || 0)
+          .filter(v => v > 0);
+        totalSets += setReps.length;
+        totalReps += setReps.reduce((s, v) => s + v, 0);
+      });
+      app.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Exercises'),
+          el('div', { class: 'big' }, String(exercises.length)),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total reps'),
+          el('div', { class: 'big' }, String(totalReps)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${totalSets} sets`),
+        ]),
+      ]));
+
+      // Per-exercise breakdown
+      const list = el('div');
+      exercises.forEach(ex => {
+        const setReps = [ex.r1, ex.r2, ex.r3, ex.r4]
+          .map(v => (v === '' || v == null) ? null : Number(v))
+          .filter(v => v !== null);
+        const setSum = setReps.reduce((s, v) => s + (v || 0), 0);
+        list.appendChild(el('div', { class: 'card session-ex' }, [
+          el('div', { class: 'session-ex-head' }, [
+            el('div', { class: 'session-ex-name' }, ex.name || '—'),
+            ex.category ? el('span', { class: 'pill ' + categoryClass(ex.category) }, ex.category) : null,
+          ]),
+          el('div', { class: 'session-ex-stats' }, [
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Weight'),
+              el('div', { class: 'session-stat-val' }, ex.weight === '' || ex.weight == null ? '—' : String(ex.weight)),
+            ]),
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Reps'),
+              el('div', { class: 'session-stat-val' }, setReps.length ? setReps.join(' / ') : '—'),
+            ]),
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Total'),
+              el('div', { class: 'session-stat-val' }, setSum ? String(setSum) : '—'),
+            ]),
+          ]),
+          ex.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px; font-style: italic;' }, ex.notes) : null,
+        ]));
+      });
+      app.appendChild(list);
+    }
+
+    // -------- Programs tab --------
+    let _programsDetailId = null; // when set, renderPrograms shows the detail view
+
+    async function renderPrograms(app) {
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, _programsDetailId ? 'Program' : 'Programs'),
+      ]));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
+      app.appendChild(skel);
+
+      let programs;
+      try { programs = await sbListPrograms(); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load programs: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (_programsDetailId) {
+        const prog = programs.find(p => p.id === _programsDetailId);
+        if (!prog) { _programsDetailId = null; return renderPrograms(app); }
+        renderProgramDetail_(app, prog);
+        return;
+      }
+
+      // List view
+      const active = programs.filter(p => p.active && !p.archived);
+      const upcoming = programs.filter(p => !p.active && !p.archived);
+      const archived = programs.filter(p => p.archived);
+
+      if (!programs.length) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No programs yet'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            'Create a program by running import_program.py with a CSV. The exercise list it imports is what the Lift logger will show.'),
+          el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px;' },
+            'See PROGRAMS_README.md in the Running Plans folder for the CSV format.'),
+        ]));
+        return;
+      }
+
+      if (active.length) {
+        const wrap = el('div');
+        wrap.appendChild(el('h2', { class: 'section-h' }, 'Active'));
+        active.forEach(p => wrap.appendChild(programCard_(p)));
+        app.appendChild(wrap);
+      }
+      if (upcoming.length) {
+        const wrap = el('div');
+        wrap.appendChild(el('h2', { class: 'section-h' }, 'Available'));
+        upcoming.forEach(p => wrap.appendChild(programCard_(p)));
+        app.appendChild(wrap);
+      }
+      if (archived.length) {
+        const wrap = el('div');
+        wrap.appendChild(el('h2', { class: 'section-h' }, 'Archived'));
+        archived.forEach(p => wrap.appendChild(programCard_(p)));
+        app.appendChild(wrap);
+      }
+
+      app.appendChild(el('div', { class: 'card', style: 'margin-top: 10px;' }, [
+        el('h2', {}, 'Add a new program'),
+        el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
+          'Build a CSV with one row per exercise per week per day, then run:'),
+        el('pre', { style: 'background: var(--surface-2); padding: 10px; border-radius: 8px; font-size: 12px; overflow-x: auto; margin-top: 8px;' },
+          'python3 import_program.py "my-program.csv" \\\n  --name "My Program Name" \\\n  --day-titles "A=Push,B=Pull,C=Legs"'),
+        el('p', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;' },
+          'Tap an Available program below and hit Activate to start using it. The Lift logger will read its templates instead of the previous active program.'),
+      ]));
+    }
+
+    function programCard_(p) {
+      const s = p.structure || {};
+      const weeks = s.weeks_total || (s.weeks ? s.weeks.length : 0);
+      const dayLetters = (s.day_letters || []).join('/');
+      const exCount = (s.weeks || []).reduce((sum, w) =>
+        sum + Object.values(w.days || {}).reduce((s2, arr) => s2 + (arr ? arr.length : 0), 0), 0);
+      const meta = [
+        weeks ? `${weeks} weeks` : '',
+        dayLetters ? `Days ${dayLetters}` : '',
+        exCount ? `${exCount} exercises` : '',
+      ].filter(Boolean).join(' · ');
+
+      return el('div', { class: 'card program-card', onclick: () => {
+        _programsDetailId = p.id;
+        render('programs');
+      }}, [
+        el('div', { class: 'program-row' }, [
+          el('div', {}, [
+            el('div', { class: 'program-name' }, p.name),
+            el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
+            p.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, p.notes) : null,
+          ]),
+          p.active ? el('span', { class: 'program-badge active' }, 'ACTIVE')
+                   : (p.archived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED')
+                                 : el('span', { class: 'program-badge' }, '')),
+        ]),
+      ]);
+    }
+
+    function renderProgramDetail_(app, p) {
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { _programsDetailId = null; render('programs'); },
+      }, '← All programs'));
+
+      const s = p.structure || {};
+      const weeks = s.weeks || [];
+      const dayLetters = s.day_letters || [];
+      const dayTitles = s.day_titles || {};
+      const exCount = weeks.reduce((sum, w) =>
+        sum + Object.values(w.days || {}).reduce((s2, arr) => s2 + (arr ? arr.length : 0), 0), 0);
+
+      // Header card
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'program-row' }, [
+          el('div', { style: 'flex: 1;' }, [
+            el('div', { class: 'program-name', style: 'font-size: 18px;' }, p.name),
+            el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
+              `${s.weeks_total || weeks.length} weeks · ${dayLetters.join('/')} · ${exCount} exercises`),
+            p.notes ? el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px;' }, p.notes) : null,
+          ]),
+          p.active ? el('span', { class: 'program-badge active' }, 'ACTIVE')
+                   : (p.archived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED') : null),
+        ]),
+
+        // Action buttons
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;' }, [
+          !p.active ? el('button', {
+            onclick: async () => {
+              try {
+                await sbActivateProgram(p.id);
+                invalidateActiveProgramCache();
+                toast('Activated');
+                render('programs');
+              } catch (e) { toast('Could not activate: ' + e.message, true); }
+            },
+            style: 'flex: 1;',
+          }, 'Activate') : null,
+          !p.archived ? el('button', {
+            onclick: async () => {
+              if (!confirm(`Archive "${p.name}"? You can reactivate it later.`)) return;
+              try {
+                await sbArchiveProgram(p.id);
+                invalidateActiveProgramCache();
+                toast('Archived');
+                render('programs');
+              } catch (e) { toast('Could not archive: ' + e.message, true); }
+            },
+            style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          }, 'Archive') : null,
+          el('button', {
+            onclick: async () => {
+              if (!confirm(`Delete "${p.name}" permanently? Lift sessions logged under it are kept, but the template is gone.`)) return;
+              try {
+                await sbDeleteProgram(p.id);
+                invalidateActiveProgramCache();
+                _programsDetailId = null;
+                toast('Deleted');
+                render('programs');
+              } catch (e) { toast('Could not delete: ' + e.message, true); }
+            },
+            style: 'flex: 1; background: var(--surface-2); color: #d97a7a; border: 1px solid var(--border);',
+          }, 'Delete'),
+        ]),
+      ]));
+
+      // Per-week breakdown
+      if (!weeks.length) {
+        app.appendChild(el('div', { class: 'card' }, 'No weeks defined.'));
+        return;
+      }
+
+      let openWeek = null;
+      const weeksContainer = el('div');
+      weeks.forEach(w => {
+        const dayCount = Object.keys(w.days || {}).length;
+        const exTotal = Object.values(w.days || {}).reduce((s, arr) => s + (arr ? arr.length : 0), 0);
+        const card = el('div', { class: 'card week-card' });
+        const headerEl = el('button', {
+          class: 'week-header',
+          onclick: () => {
+            const isOpen = card.classList.contains('open');
+            weeksContainer.querySelectorAll('.week-card.open').forEach(c => c.classList.remove('open'));
+            if (!isOpen) card.classList.add('open');
+          },
+        }, [
+          el('div', {}, [
+            el('div', { class: 'week-num' }, `Week ${w.week}`),
+            w.block_name ? el('div', { class: 'muted', style: 'font-size: 11px;' }, w.block_name) : null,
+          ]),
+          el('div', { class: 'muted', style: 'font-size: 12px;' }, `${dayCount} days · ${exTotal} exercises`),
+        ]);
+        card.appendChild(headerEl);
+
+        const body = el('div', { class: 'week-body' });
+        dayLetters.forEach(letter => {
+          const exs = (w.days && w.days[letter]) || [];
+          if (!exs.length) return;
+          const dayTitle = dayTitles[letter] || `Day ${letter}`;
+          body.appendChild(el('div', { class: 'day-block' }, [
+            el('div', { class: 'day-title' }, `Day ${letter} — ${dayTitle}`),
+            ...exs.map(ex => el('div', { class: 'ex-row' }, [
+              el('div', { class: 'ex-name' }, ex.name),
+              el('div', { class: 'muted', style: 'font-size: 12px;' },
+                `${ex.sets || '?'} × ${ex.target_reps || '?'}${ex.category ? ' · ' + ex.category : ''}`),
+              ex.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic;' }, ex.notes) : null,
+            ])),
+          ]));
+        });
+        card.appendChild(body);
+        weeksContainer.appendChild(card);
+      });
+      app.appendChild(weeksContainer);
     }
 
     async function renderProfile(app) {
