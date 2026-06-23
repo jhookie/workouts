@@ -610,6 +610,29 @@
       color: var(--accent);
       font-weight: 700;
     }
+    .goal-target {
+      cursor: pointer;
+      border-bottom: 1px dashed var(--muted);
+      padding-bottom: 1px;
+    }
+    .goal-edit-input {
+      width: 44px;
+      padding: 1px 4px;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--surface-2);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      color: var(--text);
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      -moz-appearance: textfield;
+    }
+    .goal-edit-input::-webkit-outer-spin-button,
+    .goal-edit-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
     .goal-bar {
       height: 8px;
       background: var(--border);
@@ -1031,14 +1054,16 @@
       const { start: weekStart, end: weekEnd } = weekBounds();
       const yearStart = `${now.getFullYear()}-01-01`;
       const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-      const [weekRunsR, ytdRunsR, monthRunsR, weekLiftsR, weekPuR] = await Promise.all([
+      const [weekRunsR, ytdRunsR, monthRunsR, weekLiftsR, weekPuR, profileR] = await Promise.all([
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', yearStart),
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', monthStart),
         _sb.from('lift_sessions').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('pullup_sessions').select('total_reps').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('user_profiles').select('weekly_run_count_goal,weekly_lift_count_goal').eq('id', uid).maybeSingle(),
       ]);
       const sumDist = arr => (arr || []).reduce((s, r) => s + Number(r.distance || 0), 0);
+      const profile = profileR.data || {};
       return {
         runs: {
           week:      Math.round(sumDist(weekRunsR.data)  * 10) / 10,
@@ -1052,7 +1077,24 @@
           weekSessions: (weekPuR.data || []).length,
           weekReps:     (weekPuR.data || []).reduce((s, p) => s + (p.total_reps || 0), 0),
         },
+        goals: {
+          runs:  Number(profile.weekly_run_count_goal)  || WEEKLY_RUN_GOAL_DEFAULT,
+          lifts: Number(profile.weekly_lift_count_goal) || WEEKLY_LIFT_GOAL_DEFAULT,
+        },
       };
+    }
+
+    async function sbUpdateGoal(kind, value) {
+      const v = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
+      const col = kind === 'runs' ? 'weekly_run_count_goal' : 'weekly_lift_count_goal';
+      const patch = {};
+      patch[col] = v;
+      // user_profiles row is created by the on-signup trigger, but make sure
+      // it exists before we update.
+      const { error } = await _sb.from('user_profiles')
+        .upsert({ id: currentUser.id, [col]: v }, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+      return v;
     }
 
     async function sbShoes() {
@@ -1373,6 +1415,192 @@
     const SUPABASE_URL     = 'https://qvfsyqfnrtpvuoqgtrbk.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_ogAKGcg94Ap4rwTDfNvcTw_o-yIcOev';
     const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // -------- Strava integration --------
+    // STRAVA_CLIENT_ID is the public half of your Strava app's credentials —
+    // safe to ship in the frontend. The client_secret lives only inside the
+    // strava-oauth Edge Function as a Supabase secret.
+    // Replace 0 with your numeric Strava app Client ID before deploying.
+    const STRAVA_CLIENT_ID = 0; // <<< REPLACE WITH YOUR STRAVA CLIENT ID
+
+    function stravaConfigured() { return STRAVA_CLIENT_ID && Number(STRAVA_CLIENT_ID) > 0; }
+
+    function stravaRedirectUri() {
+      // Strip query/hash so we round-trip back to the same URL the user came from.
+      const u = new URL(window.location.href);
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    }
+
+    function stravaAuthUrl() {
+      const params = new URLSearchParams({
+        client_id:     String(STRAVA_CLIENT_ID),
+        redirect_uri:  stravaRedirectUri(),
+        response_type: 'code',
+        approval_prompt: 'auto',
+        scope:         'read,activity:read_all',
+      });
+      return `https://www.strava.com/oauth/authorize?${params.toString()}`;
+    }
+
+    // Short-lived access token cache (Strava tokens expire ~6h).
+    let _stravaAccess = null; // { access_token, expires_at }
+
+    async function stravaGetAccessToken() {
+      const now = Math.floor(Date.now() / 1000);
+      if (_stravaAccess && _stravaAccess.expires_at > now + 60) {
+        return _stravaAccess.access_token;
+      }
+      // Need a fresh one — call the refresh Edge Function.
+      const { data: { session } } = await _sb.auth.getSession();
+      if (!session) throw new Error('not signed in');
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/strava-refresh`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey':        SUPABASE_ANON_KEY,
+          'content-type':  'application/json',
+        },
+      });
+      const body = await res.json();
+      if (!res.ok || !body.access_token) {
+        throw new Error(body.error || `strava refresh failed (${res.status})`);
+      }
+      _stravaAccess = { access_token: body.access_token, expires_at: body.expires_at };
+      return body.access_token;
+    }
+
+    async function stravaExchangeCode(code) {
+      const { data: { session } } = await _sb.auth.getSession();
+      if (!session) throw new Error('not signed in');
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/strava-oauth`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey':        SUPABASE_ANON_KEY,
+          'content-type':  'application/json',
+        },
+        body: JSON.stringify({ code }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.access_token) {
+        throw new Error(body.error || `strava connect failed (${res.status})`);
+      }
+      _stravaAccess = { access_token: body.access_token, expires_at: body.expires_at };
+      return body;
+    }
+
+    async function sbStravaConnection() {
+      const { data, error } = await _sb.from('strava_tokens')
+        .select('athlete_id,athlete_name,athlete_username,scope,connected_at,last_sync_at')
+        .eq('user_id', currentUser.id).maybeSingle();
+      if (error) throw new Error(error.message);
+      return data; // null if not connected
+    }
+
+    async function sbStravaDisconnect() {
+      const { error } = await _sb.from('strava_tokens').delete()
+        .eq('user_id', currentUser.id);
+      if (error) throw new Error(error.message);
+      _stravaAccess = null;
+    }
+
+    // ── Activity sync ─────────────────────────────────────
+    // Pulls runs from Strava since last_sync_at (or last 30 days on first
+    // run), maps each one to a runs row, upserts by strava_activity_id.
+    // Returns { fetched, inserted, skipped } summary.
+    async function sbStravaSync({ daysBack = 30 } = {}) {
+      const conn = await sbStravaConnection();
+      if (!conn) throw new Error('not connected to Strava');
+      const accessToken = await stravaGetAccessToken();
+
+      // Watermark: prefer last_sync_at, fall back to N days ago.
+      let after = 0;
+      if (conn.last_sync_at) {
+        after = Math.floor(new Date(conn.last_sync_at).getTime() / 1000);
+      } else {
+        after = Math.floor(Date.now() / 1000) - daysBack * 86400;
+      }
+
+      // Paginate through activities. Strava caps page_size at 200.
+      let page = 1;
+      const activities = [];
+      while (true) {
+        const url = `https://www.strava.com/api/v3/athlete/activities?after=${after}&per_page=100&page=${page}`;
+        const r = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+        if (!r.ok) throw new Error(`strava /activities ${r.status}`);
+        const batch = await r.json();
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        activities.push(...batch);
+        if (batch.length < 100) break;
+        page += 1;
+        if (page > 20) break; // safety
+      }
+
+      const RUN_TYPES = new Set(['Run', 'TrailRun', 'VirtualRun']);
+      const runs = activities.filter(a => RUN_TYPES.has(a.type) || RUN_TYPES.has(a.sport_type));
+
+      let inserted = 0, skipped = 0;
+      for (const a of runs) {
+        const dateISO = (a.start_date_local || a.start_date || '').slice(0, 10);
+        if (!dateISO) { skipped++; continue; }
+        const distMeters = Number(a.distance) || 0;
+        const distMiles = Math.round((distMeters / 1609.344) * 100) / 100;
+        if (distMiles <= 0) { skipped++; continue; }
+        const durSecs = Number(a.moving_time) || Number(a.elapsed_time) || null;
+        const pace = (durSecs && distMiles > 0) ? secsToMMSS(durSecs / distMiles) : null;
+
+        const row = {
+          user_id:            currentUser.id,
+          date:               dateISO,
+          distance:           distMiles,
+          duration_secs:      durSecs,
+          pace:               pace,
+          notes:              a.name || null, // Strava activity title in notes
+          strava_activity_id: a.id,
+        };
+
+        // Upsert: existing row with same (user_id, strava_activity_id) gets
+        // updated; otherwise inserted.
+        const { error } = await _sb.from('runs').upsert(row, {
+          onConflict: 'user_id,strava_activity_id',
+          ignoreDuplicates: false,
+        });
+        if (error) {
+          console.error('strava upsert failed', a.id, error);
+          skipped++;
+        } else {
+          inserted++;
+        }
+      }
+
+      // Update watermark to now.
+      await _sb.from('strava_tokens')
+        .update({ last_sync_at: new Date().toISOString() })
+        .eq('user_id', currentUser.id);
+
+      return { fetched: runs.length, inserted, skipped };
+    }
+
+    // Run on app start: if URL has ?code= (Strava OAuth callback), exchange it.
+    async function handleStravaCallbackIfPresent_() {
+      const params = new URLSearchParams(window.location.search);
+      const code  = params.get('code');
+      const scope = params.get('scope');
+      if (!code || !scope) return false; // not a strava callback
+      // Wait for auth to land if we just got back from sign-in.
+      try {
+        await stravaExchangeCode(code);
+        toast('Strava connected');
+      } catch (e) {
+        toast('Strava connect failed: ' + (e.message || e), true);
+      }
+      // Clean ?code= and friends out of the URL so a refresh doesn't re-trigger.
+      const clean = stravaRedirectUri();
+      window.history.replaceState({}, document.title, clean);
+      return true;
+    }
     let currentUser = null; // set by onAuthStateChange
 
     // -------- Allowlist — add friend emails here --------
@@ -1531,6 +1759,24 @@
 
     function normalizeExName_(s) {
       return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    // Look at the most recent lift session and return the NEXT day-letter
+    // after it within the given dayLetters array (cycles back to the first
+    // after the last). Returns dayLetters[0] if there's no history.
+    async function suggestNextLiftDay_(dayLetters) {
+      if (!Array.isArray(dayLetters) || !dayLetters.length) return 'A';
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('day,date')
+        .eq('user_id', uid)
+        .order('date', { ascending: false })
+        .limit(1);
+      if (error || !data || !data.length) return dayLetters[0];
+      const lastDay = String(data[0].day || '').toUpperCase();
+      const idx = dayLetters.indexOf(lastDay);
+      if (idx === -1) return dayLetters[0];
+      return dayLetters[(idx + 1) % dayLetters.length];
     }
 
     // Find the most recent lift_sessions row for (week, day) and return a
@@ -1714,10 +1960,12 @@
         // ── Weekly goals card (the main scoreboard) ──────────
         const runCount  = stats.runs  ? (stats.runs.weekCount || 0)    : 0;
         const liftCount = stats.lifts ? (stats.lifts.weekSessions || 0) : 0;
+        const runGoal   = stats.goals ? stats.goals.runs  : WEEKLY_RUN_GOAL_DEFAULT;
+        const liftGoal  = stats.goals ? stats.goals.lifts : WEEKLY_LIFT_GOAL_DEFAULT;
         app.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Weekly goals'),
-          goalRow_('Runs',  runCount,  WEEKLY_RUN_GOAL),
-          goalRow_('Lifts', liftCount, WEEKLY_LIFT_GOAL),
+          goalRow_('Runs',  runCount,  runGoal,  'runs'),
+          goalRow_('Lifts', liftCount, liftGoal, 'lifts'),
         ]));
 
         // ── Mileage stats ─────────────────────────────────────
@@ -1753,17 +2001,64 @@
       }
     }
 
-    // Weekly targets. Hardcoded for now — easy to lift into user_profiles later.
-    const WEEKLY_RUN_GOAL  = 4;
-    const WEEKLY_LIFT_GOAL = 3;
+    // Fallback weekly targets — used only if user_profiles row doesn't have
+    // explicit values set yet. Editable from Home tap-to-edit (saves to
+    // user_profiles.weekly_*_count_goal).
+    const WEEKLY_RUN_GOAL_DEFAULT  = 4;
+    const WEEKLY_LIFT_GOAL_DEFAULT = 3;
 
-    function goalRow_(label, done, goal) {
-      const pct = Math.min(100, Math.round((done / goal) * 100));
-      const isHit = done >= goal;
+    function goalRow_(label, done, goal, kind /* 'runs' | 'lifts' */) {
+      const safeGoal = Math.max(1, Number(goal) || 1);
+      const pct = Math.min(100, Math.round((done / safeGoal) * 100));
+      const isHit = done >= safeGoal;
+
+      const countEl = el('span', { class: 'goal-count' + (isHit ? ' hit' : '') });
+      const renderRead = () => {
+        countEl.innerHTML = '';
+        countEl.appendChild(document.createTextNode(`${done} / `));
+        const goalSpan = el('span', { class: 'goal-target', title: 'Tap to edit target' }, String(safeGoal));
+        goalSpan.addEventListener('click', startEdit);
+        countEl.appendChild(goalSpan);
+      };
+      const startEdit = () => {
+        countEl.innerHTML = '';
+        countEl.appendChild(document.createTextNode(`${done} / `));
+        const input = el('input', {
+          type: 'number',
+          inputmode: 'numeric',
+          pattern: '[0-9]*',
+          class: 'goal-edit-input',
+          min: '0',
+          max: '99',
+          value: String(safeGoal),
+        });
+        countEl.appendChild(input);
+        input.focus();
+        input.select();
+        const commit = async () => {
+          input.disabled = true;
+          try {
+            const newVal = await sbUpdateGoal(kind, input.value);
+            toast(`${label} goal: ${newVal}`);
+            render('home'); // refresh bar + status
+          } catch (e) {
+            toast('Could not save: ' + e.message, true);
+            renderRead();
+          }
+        };
+        let committed = false;
+        input.addEventListener('blur', () => { if (!committed) { committed = true; commit(); } });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { committed = true; input.blur(); commit(); }
+          if (e.key === 'Escape') { committed = true; renderRead(); }
+        });
+      };
+      renderRead();
+
       return el('div', { class: 'goal-row' }, [
         el('div', { class: 'goal-head' }, [
           el('span', { class: 'goal-label' }, label),
-          el('span', { class: 'goal-count' + (isHit ? ' hit' : '') }, `${done} / ${goal}`),
+          countEl,
         ]),
         el('div', { class: 'goal-bar' }, [
           el('div', { class: 'goal-fill' + (isHit ? ' hit' : ''), style: `width: ${pct}%;` }),
@@ -1822,12 +2117,20 @@
         return;
       }
 
-      // Initialize liftSelection from today's auto-detected slot if not set.
+      // Initialize liftSelection. Default day suggests the NEXT letter after
+      // the most recent lift session (so an A/B rotation cycles A → B → A
+      // automatically). Block + week come from program metadata.
       if (!liftSelection) {
-        const defaultDay = today.liftDay || 'A';
-        const defaultBlock = today.blockName || 'Block 1';
-        const defaultWeek = today.programWeek || 1;
-        liftSelection = { block: defaultBlock, week: defaultWeek, day: defaultDay };
+        const dayLetters = (prog && prog.dayLetters) || ['A', 'B', 'C'];
+        let suggestedDay = await suggestNextLiftDay_(dayLetters).catch(() => dayLetters[0]);
+        if (!dayLetters.includes(suggestedDay)) suggestedDay = dayLetters[0];
+
+        // Block defaults: first block of the active program, current week within it.
+        const firstBlock = (prog && prog.blocks && prog.blocks[0]) || null;
+        const defaultBlock = (firstBlock && firstBlock.name) || today.blockName || 'Block 1';
+        const defaultWeek  = (firstBlock && firstBlock.startWeek) || today.programWeek || 1;
+
+        liftSelection = { block: defaultBlock, week: defaultWeek, day: suggestedDay };
       }
 
       // Selector card
@@ -2834,6 +3137,80 @@
       app.appendChild(weeksContainer);
     }
 
+    async function renderStravaCard_(app) {
+      const card = el('div', { class: 'card' }, [el('h2', {}, 'Strava')]);
+
+      if (!stravaConfigured()) {
+        card.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px;' },
+          'Strava integration is not configured in this build. Set STRAVA_CLIENT_ID in index.html and deploy the strava-oauth + strava-refresh Edge Functions to enable.'));
+        app.appendChild(card);
+        return;
+      }
+
+      let conn = null;
+      try { conn = await sbStravaConnection(); }
+      catch (e) {
+        card.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px;' },
+          'Could not check Strava status: ' + e.message));
+        app.appendChild(card);
+        return;
+      }
+
+      if (!conn) {
+        card.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; margin-bottom: 12px;' },
+          'Auto-import your runs from Strava. Connecting lets the app pull each new Strava run as you finish it — distance, time, pace, all populated for you.'));
+        card.appendChild(el('button', {
+          onclick: () => { window.location.href = stravaAuthUrl(); },
+        }, 'Connect Strava'));
+        app.appendChild(card);
+        return;
+      }
+
+      // Connected — show athlete, last sync, sync button, disconnect button
+      const lastSync = conn.last_sync_at ? new Date(conn.last_sync_at).toLocaleString() : 'never';
+      card.appendChild(el('div', { style: 'margin-top: 4px; margin-bottom: 12px;' }, [
+        el('div', { style: 'font-size: 14px; color: var(--text);' },
+          `Connected as ${conn.athlete_name || conn.athlete_username || 'Strava athlete'}`),
+        el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' },
+          `Last sync: ${lastSync}`),
+      ]));
+
+      const syncBtn = el('button', {
+        style: 'flex: 1;',
+        onclick: async () => {
+          syncBtn.disabled = true;
+          syncBtn.textContent = 'Syncing…';
+          try {
+            const res = await sbStravaSync({ daysBack: 90 });
+            toast(`Synced ${res.inserted} run${res.inserted === 1 ? '' : 's'} from Strava`);
+            localStorage.setItem('stravaSyncedAt_v1', String(Date.now()));
+            render('profile');
+          } catch (e) {
+            toast('Sync failed: ' + (e.message || e), true);
+            syncBtn.disabled = false;
+            syncBtn.textContent = 'Sync now';
+          }
+        },
+      }, 'Sync now');
+
+      const disconnectBtn = el('button', {
+        style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+        onclick: async () => {
+          if (!confirm("Disconnect Strava? Your existing imported runs stay; future runs won't auto-import until you reconnect.")) return;
+          try {
+            await sbStravaDisconnect();
+            toast('Disconnected');
+            render('profile');
+          } catch (e) {
+            toast('Could not disconnect: ' + (e.message || e), true);
+          }
+        },
+      }, 'Disconnect');
+
+      card.appendChild(el('div', { style: 'display: flex; gap: 8px;' }, [syncBtn, disconnectBtn]));
+      app.appendChild(card);
+    }
+
     async function renderProfile(app) {
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Profile')]));
 
@@ -2943,6 +3320,9 @@
         card.appendChild(formWrap);
         app.appendChild(card);
       }
+
+      // Strava connection
+      await renderStravaCard_(app);
 
       // Weight placeholder
       app.appendChild(el('div', { class: 'card' }, [
@@ -3363,12 +3743,20 @@
       currentUser = user;
       if (event === 'SIGNED_IN' && !wasLoggedIn) {
         _startupRenderDone = true;
-        render(currentView || 'home');
-        flushQueue();
+        // If we landed here from a Strava OAuth redirect, finish that flow
+        // BEFORE rendering so the Profile shows the connected state.
+        handleStravaCallbackIfPresent_()
+          .catch(() => {})
+          .finally(() => {
+            render(currentView || 'home');
+            flushQueue();
+            backgroundStravaSync_();
+          });
       }
       if (event === 'SIGNED_OUT') {
         todayCache = null;
         programCache = null;
+        _stravaAccess = null;
         renderAuth($('#app'));
       }
     });
@@ -3378,9 +3766,32 @@
     _sb.auth.getSession().then(({ data: { session } }) => {
       if (_startupRenderDone) return;
       currentUser = session?.user ?? null;
-      render('home');
-      if (currentUser) flushQueue();
+      if (!currentUser) { render('home'); return; }
+      handleStravaCallbackIfPresent_()
+        .catch(() => {})
+        .finally(() => {
+          render('home');
+          flushQueue();
+          backgroundStravaSync_();
+        });
     });
+
+    // Best-effort: pull recent Strava runs in the background on app load.
+    // Throttled to once per 30 minutes per session via localStorage so we
+    // don't hammer the Strava API on every navigation.
+    async function backgroundStravaSync_() {
+      try {
+        if (!stravaConfigured() || !currentUser) return;
+        const conn = await sbStravaConnection().catch(() => null);
+        if (!conn) return;
+        const last = Number(localStorage.getItem('stravaSyncedAt_v1')) || 0;
+        if (Date.now() - last < 30 * 60 * 1000) return;
+        await sbStravaSync({ daysBack: 14 });
+        localStorage.setItem('stravaSyncedAt_v1', String(Date.now()));
+      } catch (e) {
+        // Silent — the Profile tab has a manual Sync button if this fails.
+      }
+    }
   </script>
 </body>
 </html>
