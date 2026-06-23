@@ -2137,6 +2137,17 @@
       const selectorCard = el('div', { class: 'card', id: 'selectorCard' });
       app.appendChild(selectorCard);
 
+      // Date picker — defaults to today, editable so back-logging works.
+      // Lives outside fetchAndRenderExercises so changing Block/Week/Day
+      // pills doesn't reset whatever date the user typed.
+      const dateCard = el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
+        el('div', { class: 'field', style: 'margin: 0; display: flex; align-items: center; gap: 12px;' }, [
+          el('label', { for: 'liftDate', style: 'margin: 0; min-width: 70px;' }, 'Date'),
+          el('input', { id: 'liftDate', type: 'date', value: liftSelection.date || todayISO(), style: 'flex: 1; margin: 0;' }),
+        ]),
+      ]);
+      app.appendChild(dateCard);
+
       // Exercises container
       const exContainer = el('div', { id: 'exContainer' });
       app.appendChild(exContainer);
@@ -2308,13 +2319,17 @@
                 notes: notesInp ? notesInp.value.trim() : '',
               });
             });
+            const dateInp = $('#liftDate');
             const meta = {
-              date: todayISO(),
+              date: (dateInp && dateInp.value) ? dateInp.value : todayISO(),
               block: liftSelection.block,
               week: liftSelection.week,
               day: liftSelection.day,
               notes: ($('#liftSessionNotes').value || '').trim(),
             };
+            // Remember the chosen date on liftSelection so it survives a
+            // re-render of the selector / exercises within this screen.
+            liftSelection.date = meta.date;
             try {
               const res = await sbLogLift(entries, meta);
               if (res.duplicate) toast('Already logged this session');
