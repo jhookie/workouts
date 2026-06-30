@@ -476,6 +476,32 @@
     .session-ex {
       padding: 14px 16px;
     }
+    .session-ex.progression-tap {
+      cursor: pointer;
+      transition: border-color 120ms ease;
+    }
+    .session-ex.progression-tap:active {
+      border-color: var(--accent);
+    }
+
+    /* History list */
+    .history-row {
+      cursor: pointer;
+      padding: 12px 16px;
+      transition: border-color 120ms ease;
+    }
+    .history-row:active { border-color: var(--accent); }
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .history-date {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
     .session-ex-head {
       display: flex;
       justify-content: space-between;
@@ -1739,20 +1765,20 @@
 
       if (!exercises) return { source: 'none', exercises: [] };
 
-      // Prev-week prefill from lift_sessions (works for both sources, and
-      // overrides Apps Script's prev values with what's actually in Supabase).
-      if (Number(sel.week) > 1) {
-        try {
-          const prev = await sbPrevWeekExercises_(Number(sel.week) - 1, sel.day);
-          exercises.forEach(ex => {
-            const match = prev[normalizeExName_(ex.name)];
-            if (match) {
-              ex.prevWeight = match.weight != null ? match.weight : ex.prevWeight;
-              ex.prevTotal  = match.total  != null ? match.total  : ex.prevTotal;
-            }
-          });
-        } catch (e) { /* prefill is best-effort */ }
-      }
+      // Prev-time prefill: pull the most recent matching-day session
+      // (regardless of week number) strictly before the session date being
+      // logged. Works for week-numbered programs and free-form A/B rotations.
+      try {
+        const refDate = (sel.date && /^\d{4}-\d{2}-\d{2}/.test(sel.date)) ? sel.date : todayISO();
+        const prev = await sbMostRecentSameDaySession_(sel.day, refDate);
+        exercises.forEach(ex => {
+          const match = prev[normalizeExName_(ex.name)];
+          if (match) {
+            ex.prevWeight = match.weight != null ? match.weight : ex.prevWeight;
+            ex.prevTotal  = match.total  != null ? match.total  : ex.prevTotal;
+          }
+        });
+      } catch (e) { /* prefill is best-effort */ }
 
       return { source, exercises };
     }
@@ -1779,15 +1805,21 @@
       return dayLetters[(idx + 1) % dayLetters.length];
     }
 
-    // Find the most recent lift_sessions row for (week, day) and return a
-    // map of exercise-name (normalized) → { weight, total }.
-    async function sbPrevWeekExercises_(prevWeek, day) {
+    // Find the MOST RECENT matching-day session strictly before `beforeDate`
+    // and return a map of exercise-name (normalized) → { weight, total }.
+    //
+    // Was previously keyed on `week = N-1` which assumed a calendar-week
+    // structured program. For A/B-rotation programs where the same day
+    // letter can recur multiple times in one week, that missed the
+    // intra-week case. This is the right shape for both.
+    async function sbMostRecentSameDaySession_(day, beforeDate) {
       const uid = currentUser.id;
-      const { data, error } = await _sb.from('lift_sessions')
+      let q = _sb.from('lift_sessions')
         .select('date,exercises')
-        .eq('user_id', uid).eq('week', prevWeek).eq('day', day)
-        .order('date', { ascending: false })
-        .limit(1);
+        .eq('user_id', uid).eq('day', day);
+      if (beforeDate) q = q.lt('date', beforeDate);
+      q = q.order('date', { ascending: false }).limit(1);
+      const { data, error } = await q;
       if (error) throw new Error(error.message);
       const session = (data || [])[0];
       if (!session || !Array.isArray(session.exercises)) return {};
@@ -1904,6 +1936,7 @@
       else if (view === 'calendar') await renderCalendar(app);
       else if (view === 'analytics') await renderAnalytics(app);
       else if (view === 'lift-session') await renderLiftSession(app);
+      else if (view === 'exercise-progression') await renderExerciseProgression(app);
       else if (view === 'programs') await renderPrograms(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
@@ -2139,11 +2172,22 @@
 
       // Date picker — defaults to today, editable so back-logging works.
       // Lives outside fetchAndRenderExercises so changing Block/Week/Day
-      // pills doesn't reset whatever date the user typed.
+      // pills doesn't reset whatever date the user typed. Changing the date
+      // re-triggers exercise fetch so prev-time prefill stays accurate.
+      const dateInput = el('input', {
+        id: 'liftDate',
+        type: 'date',
+        value: liftSelection.date || todayISO(),
+        style: 'flex: 1; margin: 0;',
+        onchange: () => {
+          liftSelection.date = dateInput.value || todayISO();
+          fetchAndRenderExercises();
+        },
+      });
       const dateCard = el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
         el('div', { class: 'field', style: 'margin: 0; display: flex; align-items: center; gap: 12px;' }, [
           el('label', { for: 'liftDate', style: 'margin: 0; min-width: 70px;' }, 'Date'),
-          el('input', { id: 'liftDate', type: 'date', value: liftSelection.date || todayISO(), style: 'flex: 1; margin: 0;' }),
+          dateInput,
         ]),
       ]);
       app.appendChild(dateCard);
@@ -2219,6 +2263,11 @@
         exContainer.innerHTML = '';
         const loading = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
         exContainer.appendChild(loading);
+
+        // Sync date input → liftSelection.date so the prev-time prefill uses
+        // whatever date the user has chosen (back-logging support).
+        const dateInp = $('#liftDate');
+        if (dateInp && dateInp.value) liftSelection.date = dateInp.value;
 
         // v14+: read templates from the active Supabase program. Fall back to
         // Apps Script only if no active program is set (covers users who
@@ -2565,20 +2614,21 @@
     }
 
     function renderLastWeek_(ex) {
-      // Compact "Last week" footer showing prior week's weight × total reps.
+      // Compact "Last time" footer showing the most recent same-day session's
+      // weight × total reps for this exercise. (Was "Last week" — renamed
+      // because for A/B-style rotations, "last time" can be in the same week.)
       const w = ex.prevWeight;
       const t = ex.prevTotal != null ? ex.prevTotal : ex.previous;
       const hasW = (w != null && w !== '' && w !== '—');
       const hasT = (t != null && t !== '' && t !== '—' && t !== 0 && t !== '0');
       if (!hasW && !hasT) {
-        // Subtle hint so the user can tell "no data last week" from "feature broken".
-        return el('div', { class: 'prev', style: 'color: #555;' }, 'Last week: no data');
+        return el('div', { class: 'prev', style: 'color: #555;' }, 'Last time: no data');
       }
       const parts = [];
       if (hasW) parts.push(String(w) + (typeof w === 'number' ? ' lb' : ''));
       if (hasT) parts.push(String(t) + ' reps');
       return el('div', { class: 'prev' }, [
-        el('span', {}, 'Last week: '),
+        el('span', {}, 'Last time: '),
         el('b', {}, parts.join(' · ')),
       ]);
     }
@@ -2686,12 +2736,31 @@
 
     let calendarMonth = null; // { year, month }
 
+    let _calendarView = 'cal'; // 'cal' | 'list'
+
     async function renderCalendar(app) {
       if (!calendarMonth) {
         const n = new Date();
         calendarMonth = { year: n.getFullYear(), month: n.getMonth() + 1 };
       }
-      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Calendar')]));
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, _calendarView === 'list' ? 'History' : 'Calendar'),
+      ]));
+
+      // Cal / List toggle
+      const seg = el('div', { class: 'seg', style: 'margin-bottom: 10px;' });
+      ['cal', 'list'].forEach(v => {
+        seg.appendChild(el('button', {
+          class: _calendarView === v ? 'active' : '',
+          onclick: () => { _calendarView = v; render('calendar'); },
+        }, v === 'cal' ? 'Calendar' : 'List'));
+      });
+      app.appendChild(seg);
+
+      if (_calendarView === 'list') {
+        await renderHistoryList_(app);
+        return;
+      }
 
       const headerRow = el('div', { class: 'cal-header' }, [
         el('button', { class: 'cal-nav-btn', onclick: () => {
@@ -2755,6 +2824,80 @@
           el('span', {}, [el('span', { class: 'cal-dot pull', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Pull-Ups']),
         ]),
       ]));
+    }
+
+    // List view: scrollable history of past lift sessions, newest first.
+    // Tap a row → existing Session Detail screen.
+    async function renderHistoryList_(app) {
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let sessions;
+      try {
+        const { data, error } = await _sb.from('lift_sessions')
+          .select('date,block_name,week,day,exercises,notes')
+          .eq('user_id', currentUser.id)
+          .order('date', { ascending: false })
+          .limit(200);
+        if (error) throw new Error(error.message);
+        sessions = data || [];
+      } catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load history: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (!sessions.length) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No lift sessions yet'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            'Once you log a few lifts, they\'ll appear here. Each row jumps to the full session detail.'),
+        ]));
+        return;
+      }
+
+      // Group by month for visual structure.
+      const monthBuckets = {};
+      sessions.forEach(s => {
+        const ym = (s.date || '').slice(0, 7);
+        (monthBuckets[ym] = monthBuckets[ym] || []).push(s);
+      });
+      const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+      Object.keys(monthBuckets).sort().reverse().forEach(ym => {
+        const [y, m] = ym.split('-').map(Number);
+        const label = `${monthNames[m - 1]} ${y}`;
+        app.appendChild(el('h2', { class: 'section-h' }, label));
+        const bucket = monthBuckets[ym];
+        bucket.forEach(s => {
+          const exArr = Array.isArray(s.exercises) ? s.exercises : [];
+          const exCount = exArr.length;
+          const totalReps = exArr.reduce((tot, ex) => {
+            return tot + [ex.r1, ex.r2, ex.r3, ex.r4].reduce((sum, v) => sum + (Number(v) || 0), 0);
+          }, 0);
+          const wd = new Date(s.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+          const preview = exArr.slice(0, 3).map(ex => ex.name).join(' · ') + (exArr.length > 3 ? ` · +${exArr.length - 3} more` : '');
+          app.appendChild(el('div', {
+            class: 'card history-row',
+            onclick: () => {
+              _liftSessionRef = { date: s.date, day: s.day };
+              render('lift-session');
+            },
+          }, [
+            el('div', { class: 'history-head' }, [
+              el('div', {}, [
+                el('div', { class: 'history-date' }, `${wd} · ${s.date}`),
+                el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' },
+                  `${s.block_name || '—'} · Wk ${s.week || '—'} · Day ${s.day || '—'}`),
+              ]),
+              el('div', { class: 'muted', style: 'font-size: 12px; text-align: right; white-space: nowrap;' },
+                `${exCount} ex · ${totalReps} reps`),
+            ]),
+            preview ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;' }, preview) : null,
+          ]));
+        });
+      });
     }
 
     function selectCalendarDay(day) {
@@ -2901,14 +3044,20 @@
         ]),
       ]));
 
-      // Per-exercise breakdown
+      // Per-exercise breakdown — each card opens the progression view.
       const list = el('div');
       exercises.forEach(ex => {
         const setReps = [ex.r1, ex.r2, ex.r3, ex.r4]
           .map(v => (v === '' || v == null) ? null : Number(v))
           .filter(v => v !== null);
         const setSum = setReps.reduce((s, v) => s + (v || 0), 0);
-        list.appendChild(el('div', { class: 'card session-ex' }, [
+        list.appendChild(el('div', {
+          class: 'card session-ex progression-tap',
+          onclick: () => {
+            _exerciseProgressionName = ex.name;
+            render('exercise-progression');
+          },
+        }, [
           el('div', { class: 'session-ex-head' }, [
             el('div', { class: 'session-ex-name' }, ex.name || '—'),
             ex.category ? el('span', { class: 'pill ' + categoryClass(ex.category) }, ex.category) : null,
@@ -2928,9 +3077,230 @@
             ]),
           ]),
           ex.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px; font-style: italic;' }, ex.notes) : null,
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 8px; text-align: right;' }, 'View progression →'),
         ]));
       });
       app.appendChild(list);
+    }
+
+    // -------- Exercise progression screen --------
+    let _exerciseProgressionName = null; // set by Session Detail card tap
+
+    // Fetch every lift_sessions row that contains an exercise matching this
+    // name (case + whitespace-insensitive). Returns one entry per session
+    // with the matched exercise's weight + per-set reps.
+    async function sbExerciseHistory(name) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('date,block_name,week,day,exercises,notes')
+        .eq('user_id', uid)
+        .order('date', { ascending: false })
+        .limit(500);
+      if (error) throw new Error(error.message);
+      const wanted = normalizeExName_(name);
+      const out = [];
+      (data || []).forEach(s => {
+        const arr = Array.isArray(s.exercises) ? s.exercises : [];
+        const match = arr.find(ex => normalizeExName_(ex.name) === wanted);
+        if (!match) return;
+        const setReps = [match.r1, match.r2, match.r3, match.r4]
+          .map(v => (v === '' || v == null) ? null : Number(v))
+          .filter(v => v !== null);
+        out.push({
+          date:     s.date,
+          block:    s.block_name,
+          week:     s.week,
+          day:      s.day,
+          weight:   match.weight,
+          setReps:  setReps,
+          totalReps: setReps.reduce((a, b) => a + (b || 0), 0),
+          notes:    match.notes || '',
+        });
+      });
+      return out;
+    }
+
+    function parseWeightNumber_(w) {
+      if (w == null || w === '') return null;
+      // Pull the first number out of "135", "BW+25", "55 lb", etc.
+      const m = String(w).match(/-?\d+(?:\.\d+)?/);
+      return m ? Number(m[0]) : null;
+    }
+
+    async function renderExerciseProgression(app) {
+      const name = _exerciseProgressionName;
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, name || 'Exercise'),
+      ]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { window.history.length > 1 ? window.history.back() : render('calendar'); },
+      }, '← Back'));
+
+      if (!name) {
+        app.appendChild(el('div', { class: 'card' }, 'No exercise selected.'));
+        return;
+      }
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let history;
+      try { history = await sbExerciseHistory(name); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load history: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (!history.length) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No history yet'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            `No sessions logged with "${name}" yet. Once you log a few, progression shows up here.`),
+        ]));
+        return;
+      }
+
+      // Stats summary
+      const numericWeights = history.map(h => parseWeightNumber_(h.weight)).filter(v => v != null);
+      const maxWeight = numericWeights.length ? Math.max(...numericWeights) : null;
+      const currentWeight = parseWeightNumber_(history[0].weight);
+      const lastDate = history[0].date;
+      const totalReps = history.reduce((s, h) => s + h.totalReps, 0);
+
+      app.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Sessions'),
+          el('div', { class: 'big' }, String(history.length)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `last: ${lastDate}`),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Best weight'),
+          el('div', { class: 'big' }, maxWeight != null ? String(maxWeight) : '—'),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' },
+            currentWeight != null && maxWeight != null
+              ? (currentWeight === maxWeight ? 'at PR' : `current: ${currentWeight}`)
+              : ''),
+        ]),
+      ]));
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', {}, 'Total reps logged'),
+        el('div', { class: 'big' }, String(totalReps)),
+      ]));
+
+      // Trend line — weight over time (ascending). Only render if we have at
+      // least 2 numeric data points.
+      const trendPoints = history.slice().reverse() // oldest → newest
+        .map(h => ({ date: h.date, weight: parseWeightNumber_(h.weight) }))
+        .filter(p => p.weight != null);
+      if (trendPoints.length >= 2) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Weight over time'),
+          renderTrendLine_(trendPoints),
+        ]));
+      }
+
+      // Per-session list, newest first.
+      app.appendChild(el('h2', { class: 'section-h' }, 'History'));
+      const list = el('div');
+      history.forEach(h => {
+        list.appendChild(el('div', {
+          class: 'card session-ex',
+          onclick: () => {
+            _liftSessionRef = { date: h.date, day: h.day };
+            render('lift-session');
+          },
+          style: 'cursor: pointer;',
+        }, [
+          el('div', { class: 'session-ex-head' }, [
+            el('div', { class: 'session-ex-name' }, h.date),
+            el('span', { class: 'muted', style: 'font-size: 12px;' },
+              `${h.block ? h.block + ' · ' : ''}${h.week ? 'Wk ' + h.week + ' · ' : ''}Day ${h.day || '—'}`),
+          ]),
+          el('div', { class: 'session-ex-stats' }, [
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Weight'),
+              el('div', { class: 'session-stat-val' }, h.weight === '' || h.weight == null ? '—' : String(h.weight)),
+            ]),
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Reps'),
+              el('div', { class: 'session-stat-val' }, h.setReps.length ? h.setReps.join(' / ') : '—'),
+            ]),
+            el('div', { class: 'session-stat' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Total'),
+              el('div', { class: 'session-stat-val' }, h.totalReps ? String(h.totalReps) : '—'),
+            ]),
+          ]),
+          h.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px; font-style: italic;' }, h.notes) : null,
+        ]));
+      });
+      app.appendChild(list);
+    }
+
+    // Tiny inline SVG line chart. Points: [{ date, weight }] in ascending
+    // date order, length ≥ 2. Returns an SVG element sized to fit a card.
+    function renderTrendLine_(points) {
+      const W = 320, H = 100, PAD_X = 8, PAD_Y = 14;
+      const weights = points.map(p => p.weight);
+      const minW = Math.min(...weights);
+      const maxW = Math.max(...weights);
+      const span = (maxW - minW) || 1;
+      const xStep = (W - PAD_X * 2) / (points.length - 1);
+      const xy = points.map((p, i) => {
+        const x = PAD_X + i * xStep;
+        const y = PAD_Y + (1 - (p.weight - minW) / span) * (H - PAD_Y * 2);
+        return [x, y];
+      });
+      const path = xy.map(([x, y], i) => (i === 0 ? `M${x},${y}` : `L${x},${y}`)).join(' ');
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.style.width = '100%';
+      svg.style.height = '100px';
+      svg.style.marginTop = '8px';
+
+      // Grid: baseline + top
+      const baseline = document.createElementNS(NS, 'line');
+      baseline.setAttribute('x1', PAD_X); baseline.setAttribute('x2', W - PAD_X);
+      baseline.setAttribute('y1', H - PAD_Y); baseline.setAttribute('y2', H - PAD_Y);
+      baseline.setAttribute('stroke', '#333'); baseline.setAttribute('stroke-width', '0.5');
+      svg.appendChild(baseline);
+
+      // Line
+      const line = document.createElementNS(NS, 'path');
+      line.setAttribute('d', path);
+      line.setAttribute('fill', 'none');
+      line.setAttribute('stroke', 'var(--accent)');
+      line.setAttribute('stroke-width', '2');
+      line.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(line);
+
+      // Dots
+      xy.forEach(([x, y]) => {
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', x); c.setAttribute('cy', y);
+        c.setAttribute('r', '2.5');
+        c.setAttribute('fill', 'var(--accent)');
+        svg.appendChild(c);
+      });
+
+      // Min / max labels
+      const minLbl = document.createElementNS(NS, 'text');
+      minLbl.textContent = String(minW);
+      minLbl.setAttribute('x', PAD_X); minLbl.setAttribute('y', H - 2);
+      minLbl.setAttribute('font-size', '9'); minLbl.setAttribute('fill', '#666');
+      svg.appendChild(minLbl);
+      const maxLbl = document.createElementNS(NS, 'text');
+      maxLbl.textContent = String(maxW);
+      maxLbl.setAttribute('x', PAD_X); maxLbl.setAttribute('y', 10);
+      maxLbl.setAttribute('font-size', '9'); maxLbl.setAttribute('fill', '#666');
+      svg.appendChild(maxLbl);
+
+      return svg;
     }
 
     // -------- Programs tab --------
