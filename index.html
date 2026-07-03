@@ -1249,6 +1249,7 @@
       const [
         weekRunsR, ytdRunsR, monthRunsR,
         weekLiftsR, weekPuR, weekWalksR, weekActivitiesR,
+        ytdWalksR, ytdActivitiesR,
         profileR,
       ] = await Promise.all([
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
@@ -1258,6 +1259,8 @@
         _sb.from('pullup_sessions').select('total_reps').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('walks').select('id,distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('activities').select('id,activity_type,distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('walks').select('distance').eq('user_id', uid).gte('date', yearStart),
+        _sb.from('activities').select('activity_type,distance').eq('user_id', uid).gte('date', yearStart),
         _sb.from('user_profiles').select('weekly_run_count_goal,weekly_lift_count_goal,weekly_goals').eq('id', uid).maybeSingle(),
       ]);
 
@@ -1308,6 +1311,34 @@
         rowing:   Math.round((activityDistByType.rowing   || 0) * 10) / 10,
       };
 
+      // YTD per-modality distance + count for the segmented filter on the
+      // Miles YTD card.
+      const ytdWalkMiles = (ytdWalksR.data || []).reduce((s, w) => s + (Number(w.distance) || 0), 0);
+      const ytdActByType = {};
+      const ytdActCounts = {};
+      (ytdActivitiesR.data || []).forEach(a => {
+        const t = a.activity_type || 'other';
+        const d = Number(a.distance) || 0;
+        if (d > 0) ytdActByType[t] = (ytdActByType[t] || 0) + d;
+        ytdActCounts[t] = (ytdActCounts[t] || 0) + 1;
+      });
+      const yearDistances = {
+        running:  Math.round(sumDist(ytdRunsR.data) * 10) / 10,
+        walking:  Math.round(ytdWalkMiles * 10) / 10,
+        cycling:  Math.round((ytdActByType.cycling  || 0) * 10) / 10,
+        hiking:   Math.round((ytdActByType.hiking   || 0) * 10) / 10,
+        swimming: Math.round((ytdActByType.swimming || 0) * 10) / 10,
+        rowing:   Math.round((ytdActByType.rowing   || 0) * 10) / 10,
+      };
+      const yearCounts = {
+        running:  (ytdRunsR.data  || []).length,
+        walking:  (ytdWalksR.data || []).length,
+        cycling:  ytdActCounts.cycling  || 0,
+        hiking:   ytdActCounts.hiking   || 0,
+        swimming: ytdActCounts.swimming || 0,
+        rowing:   ytdActCounts.rowing   || 0,
+      };
+
       return {
         runs: {
           week:      Math.round(sumDist(weekRunsR.data)  * 10) / 10,
@@ -1323,6 +1354,8 @@
         },
         weekCounts,
         weekDistances,
+        yearDistances,
+        yearCounts,
         goals,
       };
     }
@@ -2335,16 +2368,12 @@
           }
         }
 
-        // ── Cumulative running stat (YTD) ───────────────────
-        // Only for runners. Standalone card since it's the single "big
-        // picture" number for how the year is going.
-        if (modalities.includes('running')) {
-          app.appendChild(el('div', { class: 'card' }, [
-            el('h2', {}, 'Miles YTD'),
-            el('div', { class: 'big' }, String(stats.runs.year)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
-          ]));
-        }
+        // ── Cumulative YTD stat (with modality filter) ──────
+        // Shows a segmented control if the user picked more than one
+        // distance-having modality — lets them switch between Total /
+        // Run / Walk / Ride / etc. Total = sum of mile-based modalities
+        // only (swim yards + row meters stay separate since units differ).
+        renderYtdCard_(app, modalities, stats);
       } catch (e) {
         skel.remove();
       }
@@ -2355,6 +2384,85 @@
     // user_profiles.weekly_*_count_goal).
     const WEEKLY_RUN_GOAL_DEFAULT  = 4;
     const WEEKLY_LIFT_GOAL_DEFAULT = 3;
+
+    // Persisted selection for the YTD card filter.
+    let _ytdFilterMod = 'total';
+
+    // Renders the "YTD" card with a segmented filter across the user's
+    // picked distance-having modalities. Falls back to a single unfiltered
+    // card when the user only has one distance modality.
+    function renderYtdCard_(app, modalities, stats) {
+      // Only distance-having modalities show up.
+      const mileMods = ['running', 'walking', 'cycling', 'hiking'];
+      const otherUnitMods = { swimming: 'yd', rowing: 'm' };
+      const availableMileMods = mileMods.filter(m => modalities.includes(m));
+      const availableOtherUnit = Object.keys(otherUnitMods).filter(m => modalities.includes(m));
+      const allDistanceMods = [...availableMileMods, ...availableOtherUnit];
+      if (allDistanceMods.length === 0) return; // nothing to show
+
+      const labels = { running: 'Run', walking: 'Walk', cycling: 'Ride', hiking: 'Hike', swimming: 'Swim', rowing: 'Row' };
+      const nounPlural = { running: 'runs', walking: 'walks', cycling: 'rides', hiking: 'hikes', swimming: 'swims', rowing: 'rows' };
+      const unitFor = (m) => otherUnitMods[m] || 'mi';
+
+      // Reset filter to 'total' if the currently-selected mod isn't
+      // available anymore (user changed modalities).
+      if (_ytdFilterMod !== 'total' && !allDistanceMods.includes(_ytdFilterMod)) {
+        _ytdFilterMod = 'total';
+      }
+
+      // If user only has ONE distance modality, skip the filter — just
+      // show that modality's card directly.
+      if (allDistanceMods.length === 1) {
+        const only = allDistanceMods[0];
+        const dist = stats.yearDistances[only] || 0;
+        const count = stats.yearCounts[only] || 0;
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, `${labels[only]} YTD`),
+          el('div', { class: 'big' }, String(dist) + ' ' + unitFor(only)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${count} ${nounPlural[only]}`),
+        ]));
+        return;
+      }
+
+      // Segment list — 'total' first if we have any mile-based modalities,
+      // then each individual modality.
+      const segments = [];
+      if (availableMileMods.length > 1) segments.push({ key: 'total', label: 'Total' });
+      allDistanceMods.forEach(m => segments.push({ key: m, label: labels[m] }));
+
+      const seg = el('div', { class: 'seg' });
+      segments.forEach(s => {
+        seg.appendChild(el('button', {
+          class: (_ytdFilterMod === s.key) ? 'active' : '',
+          onclick: () => { _ytdFilterMod = s.key; render('home'); },
+        }, s.label));
+      });
+
+      // Compute the shown values based on filter.
+      let big, subtitle;
+      if (_ytdFilterMod === 'total') {
+        const sumMiles = availableMileMods.reduce((s, m) => s + (stats.yearDistances[m] || 0), 0);
+        const totalCount = availableMileMods.reduce((s, m) => s + (stats.yearCounts[m] || 0), 0);
+        big = String(Math.round(sumMiles * 10) / 10) + ' mi';
+        subtitle = availableMileMods
+          .map(m => `${stats.yearCounts[m] || 0} ${nounPlural[m]}`)
+          .join(' · ');
+      } else {
+        const m = _ytdFilterMod;
+        const dist = stats.yearDistances[m] || 0;
+        const count = stats.yearCounts[m] || 0;
+        big = String(dist) + ' ' + unitFor(m);
+        subtitle = `${count} ${nounPlural[m]}`;
+      }
+
+      const card = el('div', { class: 'card' }, [
+        el('h2', {}, _ytdFilterMod === 'total' ? 'Distance YTD' : `${labels[_ytdFilterMod]} YTD`),
+        seg,
+        el('div', { class: 'big' }, big),
+        el('div', { class: 'muted', style: 'margin-top: 4px;' }, subtitle),
+      ]);
+      app.appendChild(card);
+    }
 
     // Renders a single modality's weekly goal row.
     // - kind: modality id ('running', 'strength', 'cycling', etc.)
