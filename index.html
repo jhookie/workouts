@@ -4533,10 +4533,12 @@
           });
       }
       if (event === 'SIGNED_OUT') {
+        currentUser = null;             // <-- was missing; broke sign-out-then-in flow
         todayCache = null;
         programCache = null;
         _userProfileCache = null;
         _stravaAccess = null;
+        _onboardingState = null;         // ensure fresh onboarding on next sign-in
         renderAuth($('#app'));
       }
     });
