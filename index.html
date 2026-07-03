@@ -527,6 +527,149 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Onboarding */
+    body.no-nav nav.bottom { display: none; }
+    body.no-nav #app { padding-bottom: 24px; }
+
+    .onboard-progress {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin: 20px 0 32px;
+    }
+    .onboard-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: background 200ms ease;
+    }
+    .onboard-dot.on { background: var(--accent); }
+
+    .onboard-body {
+      max-width: 480px;
+      margin: 0 auto;
+      text-align: center;
+      padding: 0 12px;
+    }
+    .onboard-emoji {
+      font-size: 56px;
+      margin-bottom: 20px;
+    }
+    .onboard-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin: 0 0 12px;
+      color: var(--text);
+    }
+    .onboard-sub {
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .modality-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin: 24px 0;
+    }
+    .modality-card {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 14px 12px;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .modality-card.on {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+    }
+    .modality-icon {
+      font-size: 24px;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .modality-name {
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .modality-desc {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .onboard-form {
+      max-width: 400px;
+      margin: 24px auto;
+    }
+    .onboard-field {
+      margin-bottom: 16px;
+      text-align: left;
+    }
+    .onboard-field label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .onboard-field input {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 20px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .onboard-actions {
+      max-width: 480px;
+      margin: 32px auto 0;
+      padding: 0 12px;
+      display: flex;
+      gap: 10px;
+    }
+    .onboard-primary {
+      flex: 2;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 14px 20px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+    .onboard-primary:disabled {
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .onboard-secondary {
+      flex: 1;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 14px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
     /* Programs tab */
     .section-h {
       font-size: 11px;
@@ -1925,6 +2068,8 @@
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
       });
+      // Hide bottom nav on focused/full-screen views (onboarding).
+      document.body.classList.toggle('no-nav', view === 'onboarding');
       app.innerHTML = '';
       selectorOpen = false;
 
@@ -1938,6 +2083,7 @@
       else if (view === 'lift-session') await renderLiftSession(app);
       else if (view === 'exercise-progression') await renderExerciseProgression(app);
       else if (view === 'programs') await renderPrograms(app);
+      else if (view === 'onboarding') await renderOnboarding(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -3522,6 +3668,236 @@
       app.appendChild(weeksContainer);
     }
 
+    // -------- Modality catalog + profile helpers --------
+    // Ordered so the checkbox grid is roughly primary → less primary.
+    const MODALITIES = [
+      { id: 'strength', label: 'Strength',  desc: 'Weights, bodyweight, lifting sessions',       icon: '🏋️' },
+      { id: 'running',  label: 'Running',   desc: 'Road, trail, treadmill',                       icon: '🏃' },
+      { id: 'cycling',  label: 'Cycling',   desc: 'Road, gravel, indoor trainer',                 icon: '🚴' },
+      { id: 'swimming', label: 'Swimming',  desc: 'Pool, open water',                             icon: '🏊' },
+      { id: 'hiking',   label: 'Hiking',    desc: 'Trails, day hikes, backpacking',               icon: '🥾' },
+      { id: 'walking',  label: 'Walking',   desc: 'Recovery walks, Zone 2, rucking',              icon: '🚶' },
+      { id: 'rowing',   label: 'Rowing',    desc: 'Water or erg',                                 icon: '🚣' },
+      { id: 'yoga',     label: 'Yoga',      desc: 'Mobility, flexibility, mindfulness',           icon: '🧘' },
+      { id: 'other',    label: 'Other',     desc: 'CrossFit, climbing, martial arts, everything else', icon: '⭐' },
+    ];
+
+    // Cache the profile row for the session.
+    let _userProfileCache = null;
+
+    async function sbLoadUserProfile(force = false) {
+      if (!force && _userProfileCache) return _userProfileCache;
+      const { data, error } = await _sb.from('user_profiles')
+        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,modalities,dashboard_widgets,onboarded_at')
+        .eq('id', currentUser.id).maybeSingle();
+      if (error) { _userProfileCache = null; return null; }
+      _userProfileCache = data;
+      return data;
+    }
+
+    async function sbSaveOnboarding({ modalities, weeklyGoals }) {
+      const patch = {
+        id:            currentUser.id,
+        modalities:    modalities || [],
+        onboarded_at:  new Date().toISOString(),
+      };
+      if (weeklyGoals && typeof weeklyGoals.runs  === 'number') patch.weekly_run_count_goal  = weeklyGoals.runs;
+      if (weeklyGoals && typeof weeklyGoals.lifts === 'number') patch.weekly_lift_count_goal = weeklyGoals.lifts;
+      const { error } = await _sb.from('user_profiles').upsert(patch, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+      _userProfileCache = null;
+    }
+
+    function needsOnboarding_(profile) {
+      // No profile row yet, or onboarded_at is null → show onboarding.
+      // (Existing users pre-migration will have null modalities → also onboard.)
+      return !profile || !profile.onboarded_at;
+    }
+
+    function userModalities_(profile) {
+      const arr = (profile && Array.isArray(profile.modalities)) ? profile.modalities : [];
+      return arr.length ? arr : ['strength', 'running']; // safe fallback for pre-onboarded users
+    }
+
+    // -------- Onboarding wizard --------
+    // State survives step transitions but resets on view re-entry.
+    let _onboardingState = null;
+
+    async function renderOnboarding(app) {
+      if (!_onboardingState) {
+        _onboardingState = {
+          step: 1,
+          modalities: new Set(['strength', 'running']),
+          weeklyGoals: { runs: 4, lifts: 3 },
+        };
+      }
+      const s = _onboardingState;
+
+      // Header (compact — no bottom nav on onboarding for focus)
+      app.appendChild(el('div', { class: 'onboard-progress' }, [
+        el('div', { class: 'onboard-dot' + (s.step >= 1 ? ' on' : '') }),
+        el('div', { class: 'onboard-dot' + (s.step >= 2 ? ' on' : '') }),
+        el('div', { class: 'onboard-dot' + (s.step >= 3 ? ' on' : '') }),
+        el('div', { class: 'onboard-dot' + (s.step >= 4 ? ' on' : '') }),
+      ]));
+
+      if      (s.step === 1) renderOnboardStep1_(app, s);
+      else if (s.step === 2) renderOnboardStep2_(app, s);
+      else if (s.step === 3) renderOnboardStep3_(app, s);
+      else                    renderOnboardStep4_(app, s);
+    }
+
+    function renderOnboardStep1_(app, s) {
+      app.appendChild(el('div', { class: 'onboard-body' }, [
+        el('div', { class: 'onboard-emoji' }, '👋'),
+        el('h1', { class: 'onboard-title' }, 'Welcome'),
+        el('p', { class: 'onboard-sub' },
+          "This is your training log — the one place that holds every session, every progression, every year of history. Whatever you train, however you train, it goes here."),
+        el('p', { class: 'onboard-sub', style: 'margin-top: 20px; font-style: italic;' },
+          "Takes about 30 seconds to set up. You can change anything later."),
+      ]));
+      app.appendChild(el('div', { class: 'onboard-actions' }, [
+        el('button', {
+          class: 'onboard-primary',
+          onclick: () => { s.step = 2; render('onboarding'); },
+        }, 'Get started →'),
+      ]));
+    }
+
+    function renderOnboardStep2_(app, s) {
+      app.appendChild(el('div', { class: 'onboard-body' }, [
+        el('h1', { class: 'onboard-title' }, 'What do you train?'),
+        el('p', { class: 'onboard-sub' },
+          'Pick everything that applies. The app will show only what matters to you.'),
+      ]));
+
+      const grid = el('div', { class: 'modality-grid' });
+      MODALITIES.forEach(m => {
+        const isOn = s.modalities.has(m.id);
+        const card = el('button', {
+          class: 'modality-card' + (isOn ? ' on' : ''),
+          onclick: () => {
+            if (s.modalities.has(m.id)) s.modalities.delete(m.id);
+            else s.modalities.add(m.id);
+            render('onboarding');
+          },
+        }, [
+          el('div', { class: 'modality-icon' }, m.icon),
+          el('div', { class: 'modality-name' }, m.label),
+          el('div', { class: 'modality-desc' }, m.desc),
+        ]);
+        grid.appendChild(card);
+      });
+      app.appendChild(grid);
+
+      app.appendChild(el('div', { class: 'onboard-actions' }, [
+        el('button', {
+          class: 'onboard-secondary',
+          onclick: () => { s.step = 1; render('onboarding'); },
+        }, '← Back'),
+        el('button', {
+          class: 'onboard-primary',
+          disabled: s.modalities.size === 0 ? 'disabled' : null,
+          onclick: () => {
+            if (s.modalities.size === 0) return;
+            s.step = 3;
+            render('onboarding');
+          },
+        }, s.modalities.size ? `Next (${s.modalities.size} picked) →` : 'Pick at least one →'),
+      ]));
+    }
+
+    function renderOnboardStep3_(app, s) {
+      // Only show weekly goals for modalities the user picked that have goals
+      // (runs + strength are the two with existing goal columns).
+      const showRuns  = s.modalities.has('running');
+      const showLifts = s.modalities.has('strength');
+
+      app.appendChild(el('div', { class: 'onboard-body' }, [
+        el('h1', { class: 'onboard-title' }, 'Weekly goals?'),
+        el('p', { class: 'onboard-sub' },
+          'Optional. You can change these anytime by tapping the numbers on Home.'),
+      ]));
+
+      const form = el('div', { class: 'onboard-form' });
+      if (showRuns) {
+        form.appendChild(el('div', { class: 'onboard-field' }, [
+          el('label', {}, 'Runs per week'),
+          el('input', {
+            id: 'onbRunGoal', type: 'number', min: '0', max: '99',
+            inputmode: 'numeric', pattern: '[0-9]*',
+            value: String(s.weeklyGoals.runs),
+            oninput: (e) => { s.weeklyGoals.runs = Number(e.target.value) || 0; },
+          }),
+        ]));
+      }
+      if (showLifts) {
+        form.appendChild(el('div', { class: 'onboard-field' }, [
+          el('label', {}, 'Lifts per week'),
+          el('input', {
+            id: 'onbLiftGoal', type: 'number', min: '0', max: '99',
+            inputmode: 'numeric', pattern: '[0-9]*',
+            value: String(s.weeklyGoals.lifts),
+            oninput: (e) => { s.weeklyGoals.lifts = Number(e.target.value) || 0; },
+          }),
+        ]));
+      }
+      if (!showRuns && !showLifts) {
+        form.appendChild(el('div', { class: 'muted', style: 'font-size: 14px;' },
+          "No weekly-goal targets for your selected modalities yet. Goal tracking will come in future updates."));
+      }
+      app.appendChild(form);
+
+      app.appendChild(el('div', { class: 'onboard-actions' }, [
+        el('button', {
+          class: 'onboard-secondary',
+          onclick: () => { s.step = 2; render('onboarding'); },
+        }, '← Back'),
+        el('button', {
+          class: 'onboard-primary',
+          onclick: () => { s.step = 4; render('onboarding'); },
+        }, 'Next →'),
+      ]));
+    }
+
+    function renderOnboardStep4_(app, s) {
+      const picks = Array.from(s.modalities).map(id => {
+        const m = MODALITIES.find(x => x.id === id);
+        return m ? m.label : id;
+      }).join(', ');
+
+      app.appendChild(el('div', { class: 'onboard-body' }, [
+        el('div', { class: 'onboard-emoji' }, '✅'),
+        el('h1', { class: 'onboard-title' }, "You're ready"),
+        el('p', { class: 'onboard-sub' },
+          `We'll show you tiles for ${picks}. Weekly goals set. History starts today.`),
+        el('p', { class: 'onboard-sub', style: 'margin-top: 20px;' },
+          'Tap Finish, then start logging. Everything else you need is inside the app.'),
+      ]));
+      app.appendChild(el('div', { class: 'onboard-actions' }, [
+        el('button', {
+          class: 'onboard-secondary',
+          onclick: () => { s.step = 3; render('onboarding'); },
+        }, '← Back'),
+        el('button', {
+          class: 'onboard-primary',
+          onclick: async () => {
+            try {
+              await sbSaveOnboarding({
+                modalities: Array.from(s.modalities),
+                weeklyGoals: s.weeklyGoals,
+              });
+              _onboardingState = null;
+              toast('All set — welcome');
+              render('home');
+            } catch (e) {
+              toast('Could not save: ' + e.message, true);
+            }
+          },
+        }, 'Finish →'),
+      ]));
+    }
+
     async function renderStravaCard_(app) {
       const card = el('div', { class: 'card' }, [el('h2', {}, 'Strava')]);
 
@@ -4132,8 +4508,9 @@
         // BEFORE rendering so the Profile shows the connected state.
         handleStravaCallbackIfPresent_()
           .catch(() => {})
-          .finally(() => {
-            render(currentView || 'home');
+          .finally(async () => {
+            const initial = await chooseInitialView_();
+            render(initial);
             flushQueue();
             backgroundStravaSync_();
           });
@@ -4141,6 +4518,7 @@
       if (event === 'SIGNED_OUT') {
         todayCache = null;
         programCache = null;
+        _userProfileCache = null;
         _stravaAccess = null;
         renderAuth($('#app'));
       }
@@ -4148,18 +4526,26 @@
 
     // Check for existing session on load (handles returning users + magic link redirect)
     // Skip if onAuthStateChange already triggered a render (prevents double-render race condition)
-    _sb.auth.getSession().then(({ data: { session } }) => {
+    _sb.auth.getSession().then(async ({ data: { session } }) => {
       if (_startupRenderDone) return;
       currentUser = session?.user ?? null;
       if (!currentUser) { render('home'); return; }
-      handleStravaCallbackIfPresent_()
-        .catch(() => {})
-        .finally(() => {
-          render('home');
-          flushQueue();
-          backgroundStravaSync_();
-        });
+      await handleStravaCallbackIfPresent_().catch(() => {});
+      const initial = await chooseInitialView_();
+      render(initial);
+      flushQueue();
+      backgroundStravaSync_();
     });
+
+    // Post-signin routing: onboarding if not done, otherwise home (or whatever
+    // view was in progress).
+    async function chooseInitialView_() {
+      try {
+        const profile = await sbLoadUserProfile();
+        if (needsOnboarding_(profile)) return 'onboarding';
+      } catch (e) { /* fall through to home */ }
+      return currentView || 'home';
+    }
 
     // Best-effort: pull recent Strava runs in the background on app load.
     // Throttled to once per 30 minutes per session via localStorage so we
