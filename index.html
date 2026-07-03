@@ -1256,8 +1256,8 @@
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', monthStart),
         _sb.from('lift_sessions').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('pullup_sessions').select('total_reps').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
-        _sb.from('walks').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
-        _sb.from('activities').select('id,activity_type').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('walks').select('id,distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('activities').select('id,activity_type,distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('user_profiles').select('weekly_run_count_goal,weekly_lift_count_goal,weekly_goals').eq('id', uid).maybeSingle(),
       ]);
 
@@ -1277,10 +1277,14 @@
       const runCount    = (weekRunsR.data  || []).length;
       const walkCount   = (weekWalksR.data || []).length;
       const activityByType = {};
+      const activityDistByType = {};
       (weekActivitiesR.data || []).forEach(a => {
         const t = a.activity_type || 'other';
         activityByType[t] = (activityByType[t] || 0) + 1;
+        const d = Number(a.distance) || 0;
+        if (d > 0) activityDistByType[t] = (activityDistByType[t] || 0) + d;
       });
+      const walkMiles = (weekWalksR.data || []).reduce((s, w) => s + (Number(w.distance) || 0), 0);
       const weekCounts = {
         strength: liftCount + puCount,
         running:  runCount,
@@ -1291,6 +1295,17 @@
         rowing:   activityByType.rowing   || 0,
         yoga:     activityByType.yoga     || 0,
         other:    activityByType.other    || 0,
+      };
+
+      // Per-modality distance summary (miles unless noted).
+      // Skip yoga/other/hiking-without-distance in the UI; here we just
+      // compute totals and let renderHome decide what to show.
+      const weekDistances = {
+        walking:  Math.round(walkMiles * 10) / 10,
+        cycling:  Math.round((activityDistByType.cycling  || 0) * 10) / 10,
+        hiking:   Math.round((activityDistByType.hiking   || 0) * 10) / 10,
+        swimming: Math.round((activityDistByType.swimming || 0) * 10) / 10,
+        rowing:   Math.round((activityDistByType.rowing   || 0) * 10) / 10,
       };
 
       return {
@@ -1307,6 +1322,7 @@
           weekReps:     (weekPuR.data || []).reduce((s, p) => s + (p.total_reps || 0), 0),
         },
         weekCounts,
+        weekDistances,
         goals,
       };
     }
@@ -2293,6 +2309,38 @@
               el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
             ]),
           ]));
+        }
+
+        // Per-modality distance cards for anything the user picked that has
+        // distance data this week. Skips Running (already shown above) and
+        // Yoga/Other (no distance concept).
+        const distanceLabels = {
+          walking:  { label: 'Walking miles this week', unit: 'mi' },
+          cycling:  { label: 'Ride miles this week',    unit: 'mi' },
+          hiking:   { label: 'Hike miles this week',    unit: 'mi' },
+          swimming: { label: 'Swim yards this week',    unit: 'yd' },
+          rowing:   { label: 'Row meters this week',    unit: 'm'  },
+        };
+        const distanceCards = [];
+        ['walking','cycling','hiking','swimming','rowing'].forEach(mod => {
+          if (!modalities.includes(mod)) return;
+          const dist = stats.weekDistances[mod] || 0;
+          if (dist <= 0) return; // only show if there's data
+          const cfg = distanceLabels[mod];
+          distanceCards.push(el('div', { class: 'card' }, [
+            el('h2', {}, cfg.label),
+            el('div', { class: 'big' }, String(dist)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, cfg.unit),
+          ]));
+        });
+        // Pair them into a stat-grid two at a time.
+        for (let i = 0; i < distanceCards.length; i += 2) {
+          const pair = distanceCards.slice(i, i + 2);
+          if (pair.length === 2) {
+            app.appendChild(el('div', { class: 'stat-grid' }, pair));
+          } else {
+            app.appendChild(pair[0]);
+          }
         }
 
         // Strength users get a Pull-Ups detail card if they've logged any.
