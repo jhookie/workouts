@@ -3731,8 +3731,8 @@
       if (!_onboardingState) {
         _onboardingState = {
           step: 1,
-          modalities: new Set(['strength', 'running']),
-          weeklyGoals: { runs: 4, lifts: 3 },
+          modalities: new Set(),         // no pre-selection — user picks intentionally
+          weeklyGoals: { runs: 0, lifts: 0 }, // zero = "not set", user opts in
         };
       }
       const s = _onboardingState;
@@ -3812,15 +3812,17 @@
     }
 
     function renderOnboardStep3_(app, s) {
-      // Only show weekly goals for modalities the user picked that have goals
-      // (runs + strength are the two with existing goal columns).
+      // Only show weekly goal inputs for modalities that have goal columns
+      // in the DB right now (runs + strength). Other picked modalities get
+      // an "coming in the next update" note so users know why they're missing.
       const showRuns  = s.modalities.has('running');
       const showLifts = s.modalities.has('strength');
+      const otherPicked = Array.from(s.modalities).filter(m => m !== 'running' && m !== 'strength');
 
       app.appendChild(el('div', { class: 'onboard-body' }, [
         el('h1', { class: 'onboard-title' }, 'Weekly goals?'),
         el('p', { class: 'onboard-sub' },
-          'Optional. You can change these anytime by tapping the numbers on Home.'),
+          'Optional. Leave blank and you can set them anytime by tapping the numbers on Home.'),
       ]));
 
       const form = el('div', { class: 'onboard-form' });
@@ -3830,7 +3832,8 @@
           el('input', {
             id: 'onbRunGoal', type: 'number', min: '0', max: '99',
             inputmode: 'numeric', pattern: '[0-9]*',
-            value: String(s.weeklyGoals.runs),
+            placeholder: 'e.g. 3',
+            value: s.weeklyGoals.runs > 0 ? String(s.weeklyGoals.runs) : '',
             oninput: (e) => { s.weeklyGoals.runs = Number(e.target.value) || 0; },
           }),
         ]));
@@ -3841,14 +3844,24 @@
           el('input', {
             id: 'onbLiftGoal', type: 'number', min: '0', max: '99',
             inputmode: 'numeric', pattern: '[0-9]*',
-            value: String(s.weeklyGoals.lifts),
+            placeholder: 'e.g. 3',
+            value: s.weeklyGoals.lifts > 0 ? String(s.weeklyGoals.lifts) : '',
             oninput: (e) => { s.weeklyGoals.lifts = Number(e.target.value) || 0; },
           }),
         ]));
       }
-      if (!showRuns && !showLifts) {
+      if (otherPicked.length) {
+        const otherLabels = otherPicked
+          .map(id => (MODALITIES.find(m => m.id === id) || {}).label || id)
+          .join(', ');
+        form.appendChild(el('div', {
+          class: 'muted',
+          style: 'font-size: 13px; margin-top: 16px; padding: 12px; background: var(--surface-2); border-radius: 8px; line-height: 1.5;',
+        }, `Goal tracking for ${otherLabels} is coming soon. Log those sessions manually for now — they'll still show up on your Calendar and History.`));
+      }
+      if (!showRuns && !showLifts && !otherPicked.length) {
         form.appendChild(el('div', { class: 'muted', style: 'font-size: 14px;' },
-          "No weekly-goal targets for your selected modalities yet. Goal tracking will come in future updates."));
+          "You didn't pick any modalities. Go back and select at least one to continue."));
       }
       app.appendChild(form);
 
