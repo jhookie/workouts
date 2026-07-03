@@ -2295,40 +2295,32 @@
         });
         app.appendChild(goalsCard);
 
-        // ── Modality-specific stats ─────────────────────────
-        // Runners get miles cards. Not shown for non-runners.
+        // ── This-week distance cards ────────────────────────
+        // Pair "Miles this week" (running) with per-modality distance stats
+        // (walking, cycling, hiking, swimming, rowing) so the row layout is
+        // balanced regardless of which modalities you picked.
+        const distanceCards = [];
         if (modalities.includes('running')) {
-          app.appendChild(el('div', { class: 'stat-grid' }, [
-            el('div', { class: 'card' }, [
-              el('h2', {}, 'Miles this week'),
-              el('div', { class: 'big' }, String(stats.runs.week)),
-            ]),
-            el('div', { class: 'card' }, [
-              el('h2', {}, 'Miles YTD'),
-              el('div', { class: 'big' }, String(stats.runs.year)),
-              el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
-            ]),
+          distanceCards.push(el('div', { class: 'card' }, [
+            el('h2', {}, 'Miles this week'),
+            el('div', { class: 'big' }, String(stats.runs.week)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'running'),
           ]));
         }
-
-        // Per-modality distance cards for anything the user picked that has
-        // distance data this week. Skips Running (already shown above) and
-        // Yoga/Other (no distance concept).
         const distanceLabels = {
-          walking:  { label: 'Walking miles this week', unit: 'mi' },
-          cycling:  { label: 'Ride miles this week',    unit: 'mi' },
-          hiking:   { label: 'Hike miles this week',    unit: 'mi' },
-          swimming: { label: 'Swim yards this week',    unit: 'yd' },
-          rowing:   { label: 'Row meters this week',    unit: 'm'  },
+          walking:  { label: 'Walking',  unit: 'mi' },
+          cycling:  { label: 'Ride',     unit: 'mi' },
+          hiking:   { label: 'Hike',     unit: 'mi' },
+          swimming: { label: 'Swim',     unit: 'yd' },
+          rowing:   { label: 'Row',      unit: 'm'  },
         };
-        const distanceCards = [];
         ['walking','cycling','hiking','swimming','rowing'].forEach(mod => {
           if (!modalities.includes(mod)) return;
           const dist = stats.weekDistances[mod] || 0;
           if (dist <= 0) return; // only show if there's data
           const cfg = distanceLabels[mod];
           distanceCards.push(el('div', { class: 'card' }, [
-            el('h2', {}, cfg.label),
+            el('h2', {}, `${cfg.label} this week`),
             el('div', { class: 'big' }, String(dist)),
             el('div', { class: 'muted', style: 'margin-top: 4px;' }, cfg.unit),
           ]));
@@ -2343,28 +2335,15 @@
           }
         }
 
-        // Strength users get a Pull-Ups detail card if they've logged any.
-        const puWk   = stats.pullups.weekSessions;
-        const puReps = stats.pullups.weekReps;
-        const rowCards = [];
-        if (modalities.includes('strength') && (puWk > 0 || puReps > 0)) {
-          rowCards.push(el('div', { class: 'card' }, [
-            el('h2', {}, 'Pull-Ups'),
-            el('div', { class: 'big' }, String(puWk)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${puReps} reps this week`),
-          ]));
-        }
+        // ── Cumulative running stat (YTD) ───────────────────
+        // Only for runners. Standalone card since it's the single "big
+        // picture" number for how the year is going.
         if (modalities.includes('running')) {
-          rowCards.push(el('div', { class: 'card' }, [
-            el('h2', {}, 'This month'),
-            el('div', { class: 'big' }, String(stats.runs.month)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'miles run'),
+          app.appendChild(el('div', { class: 'card' }, [
+            el('h2', {}, 'Miles YTD'),
+            el('div', { class: 'big' }, String(stats.runs.year)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
           ]));
-        }
-        if (rowCards.length === 2) {
-          app.appendChild(el('div', { class: 'stat-grid' }, rowCards));
-        } else if (rowCards.length === 1) {
-          app.appendChild(rowCards[0]);
         }
       } catch (e) {
         skel.remove();
@@ -4091,13 +4070,13 @@
       { id: 'other',    label: 'Other',     desc: 'CrossFit, climbing, martial arts, everything else', icon: '⭐' },
     ];
 
-    // Which loggers appear on Home for each modality. Strength has two
-    // (Lift + Pull-Ups) because pull-ups are strength but have their own
-    // logging shape; the rest have one each.
+    // Which loggers appear on Home for each modality. Pull-Ups are no longer
+    // a top-level tile — most users treat pull-ups as an exercise inside a
+    // Lift session. Users who want to log pure pull-up sessions can still
+    // reach the screen by navigating directly to /?view=pullups.
     const MODALITY_TILES = {
       strength: [
-        { view: 'lift',    label: 'Lift',     iconKey: 'lift' },
-        { view: 'pullups', label: 'Pull-Ups', iconKey: 'pullups' },
+        { view: 'lift', label: 'Lift', iconKey: 'lift' },
       ],
       running:  [{ view: 'run',                  label: 'Run',   iconKey: 'run' }],
       walking:  [{ view: 'walk',                 label: 'Walk',  iconKey: 'walk' }],
