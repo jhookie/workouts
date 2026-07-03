@@ -527,6 +527,29 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Feedback rating stars */
+    .feedback-rating {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .feedback-star {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      font-size: 22px;
+      padding: 0;
+      cursor: pointer;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+    .feedback-star.on {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
     /* Onboarding */
     body.no-nav nav.bottom { display: none; }
     body.no-nav #app { padding-bottom: 24px; }
@@ -1223,46 +1246,88 @@
       const { start: weekStart, end: weekEnd } = weekBounds();
       const yearStart = `${now.getFullYear()}-01-01`;
       const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-      const [weekRunsR, ytdRunsR, monthRunsR, weekLiftsR, weekPuR, profileR] = await Promise.all([
+      const [
+        weekRunsR, ytdRunsR, monthRunsR,
+        weekLiftsR, weekPuR, weekWalksR, weekActivitiesR,
+        profileR,
+      ] = await Promise.all([
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', yearStart),
         _sb.from('runs').select('distance').eq('user_id', uid).gte('date', monthStart),
         _sb.from('lift_sessions').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
         _sb.from('pullup_sessions').select('total_reps').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
-        _sb.from('user_profiles').select('weekly_run_count_goal,weekly_lift_count_goal').eq('id', uid).maybeSingle(),
+        _sb.from('walks').select('id').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('activities').select('id,activity_type').eq('user_id', uid).gte('date', weekStart).lte('date', weekEnd),
+        _sb.from('user_profiles').select('weekly_run_count_goal,weekly_lift_count_goal,weekly_goals').eq('id', uid).maybeSingle(),
       ]);
+
       const sumDist = arr => (arr || []).reduce((s, r) => s + Number(r.distance || 0), 0);
       const profile = profileR.data || {};
+
+      // Legacy → JSONB fallback: if weekly_goals is empty but the old columns
+      // have values, treat those as the source of truth.
+      const jsonGoals = (profile.weekly_goals && typeof profile.weekly_goals === 'object') ? profile.weekly_goals : {};
+      const goals = { ...jsonGoals };
+      if (goals.running == null && profile.weekly_run_count_goal)  goals.running  = profile.weekly_run_count_goal;
+      if (goals.strength == null && profile.weekly_lift_count_goal) goals.strength = profile.weekly_lift_count_goal;
+
+      // Count sessions per modality for this week.
+      const liftCount   = (weekLiftsR.data || []).length;
+      const puCount     = (weekPuR.data    || []).length;
+      const runCount    = (weekRunsR.data  || []).length;
+      const walkCount   = (weekWalksR.data || []).length;
+      const activityByType = {};
+      (weekActivitiesR.data || []).forEach(a => {
+        const t = a.activity_type || 'other';
+        activityByType[t] = (activityByType[t] || 0) + 1;
+      });
+      const weekCounts = {
+        strength: liftCount + puCount,
+        running:  runCount,
+        walking:  walkCount,
+        cycling:  activityByType.cycling  || 0,
+        hiking:   activityByType.hiking   || 0,
+        swimming: activityByType.swimming || 0,
+        rowing:   activityByType.rowing   || 0,
+        yoga:     activityByType.yoga     || 0,
+        other:    activityByType.other    || 0,
+      };
+
       return {
         runs: {
           week:      Math.round(sumDist(weekRunsR.data)  * 10) / 10,
-          weekCount: (weekRunsR.data || []).length,
+          weekCount: runCount,
           year:      Math.round(sumDist(ytdRunsR.data)   * 10) / 10,
           yearCount: (ytdRunsR.data  || []).length,
           month:     Math.round(sumDist(monthRunsR.data) * 10) / 10,
         },
-        lifts:   { weekSessions: (weekLiftsR.data || []).length },
+        lifts:   { weekSessions: liftCount },
         pullups: {
-          weekSessions: (weekPuR.data || []).length,
+          weekSessions: puCount,
           weekReps:     (weekPuR.data || []).reduce((s, p) => s + (p.total_reps || 0), 0),
         },
-        goals: {
-          runs:  Number(profile.weekly_run_count_goal)  || WEEKLY_RUN_GOAL_DEFAULT,
-          lifts: Number(profile.weekly_lift_count_goal) || WEEKLY_LIFT_GOAL_DEFAULT,
-        },
+        weekCounts,
+        goals,
       };
     }
 
-    async function sbUpdateGoal(kind, value) {
+    // Update the goal for a single modality. modalityId is a modality slug
+    // (e.g. 'running', 'strength', 'cycling') matching MODALITIES.
+    async function sbUpdateGoal(modalityId, value) {
       const v = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
-      const col = kind === 'runs' ? 'weekly_run_count_goal' : 'weekly_lift_count_goal';
-      const patch = {};
-      patch[col] = v;
-      // user_profiles row is created by the on-signup trigger, but make sure
-      // it exists before we update.
-      const { error } = await _sb.from('user_profiles')
-        .upsert({ id: currentUser.id, [col]: v }, { onConflict: 'id' });
+      // Load current goals, mutate the one key, upsert the whole JSONB.
+      const profile = await sbLoadUserProfile();
+      const current = (profile && profile.weekly_goals) || {};
+      const next = { ...current };
+      if (v > 0) next[modalityId] = v;
+      else       delete next[modalityId];
+      // Legacy column parity so old code paths still see reasonable values.
+      const patch = { id: currentUser.id, weekly_goals: next };
+      if (modalityId === 'running')  patch.weekly_run_count_goal  = v;
+      if (modalityId === 'strength') patch.weekly_lift_count_goal = v;
+      const { error } = await _sb.from('user_profiles').upsert(patch, { onConflict: 'id' });
       if (error) throw new Error(error.message);
+      _userProfileCache = null;
       return v;
     }
 
@@ -1395,6 +1460,51 @@
       const { error } = await _sb.from('walks').insert({ user_id: uid, date: walk.date, distance: walk.distance, duration_secs: dur || null, notes: walk.notes || null });
       if (error) throw new Error(error.message);
       return { duplicate: false };
+    }
+
+    // Generic activity logger for modalities without specialized data
+    // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
+    const APP_VERSION = 'v20';
+
+    // Insert a feedback row. Rating optional. Message required.
+    async function sbSendFeedback({ rating, message, contextView }) {
+      const row = {
+        user_id:      currentUser?.id || null,
+        user_email:   currentUser?.email || null,
+        rating:       rating || null,
+        message:      String(message || '').trim(),
+        context_view: contextView || null,
+        app_version:  APP_VERSION,
+        user_agent:   navigator.userAgent || null,
+      };
+      if (!row.message) throw new Error('Message required');
+      const { error } = await _sb.from('feedback').insert(row);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    async function sbLogActivity(activity) {
+      const uid = currentUser.id;
+      const row = {
+        user_id:       uid,
+        date:          activity.date,
+        activity_type: activity.type,
+        duration_secs: activity.duration_secs || null,
+        distance:      activity.distance ? Number(activity.distance) : null,
+        intensity:     activity.intensity || null,
+        notes:         activity.notes || null,
+      };
+      // Loose dedup: same user + type + date + distance + time = skip.
+      const dupQ = _sb.from('activities').select('id')
+        .eq('user_id', uid).eq('date', activity.date).eq('activity_type', activity.type);
+      const { data: dup } = await dupQ.limit(5);
+      const matched = (dup || []).some(r => true); // any existing on same date+type is a soft-match
+      if (matched && activity.duration_secs) {
+        // Still allow — user might log two rides in a day. No strict dedup here.
+      }
+      const { error } = await _sb.from('activities').insert(row);
+      if (error) throw new Error(error.message);
+      return { ok: true };
     }
 
     async function sbLogPullUps(session) {
@@ -2067,8 +2177,10 @@
       // Auth gate — show sign-in screen if no active session
       if (!currentUser) return renderAuth(app);
 
-      // lift/run/pullups don't have a top-level nav anymore — they highlight Home.
-      const navView = (view === 'lift' || view === 'run' || view === 'pullups' || view === 'walk') ? 'home' : view;
+      // Logger views (lift/run/pullups/walk/activity-*) don't have their own
+      // top-level nav — they all highlight Home.
+      const isLoggerView = view === 'lift' || view === 'run' || view === 'pullups' || view === 'walk' || (view && view.startsWith('activity-'));
+      const navView = isLoggerView ? 'home' : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
       });
@@ -2088,6 +2200,8 @@
       else if (view === 'exercise-progression') await renderExerciseProgression(app);
       else if (view === 'programs') await renderPrograms(app);
       else if (view === 'onboarding') await renderOnboarding(app);
+      else if (view && view.startsWith('activity-')) await renderActivity(app, view.slice('activity-'.length));
+      else if (view === 'feedback') await renderFeedback(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -2123,15 +2237,22 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      // Action grid — all four tiles equal; no day-based highlighting.
-      // Jeff aims for 4 runs / 3 lifts per week on his own schedule, so
-      // pre-selecting one based on day-of-week stopped making sense.
-      app.appendChild(el('div', { class: 'action-grid' }, [
-        actionTile_('lift',    'Lift',     false),
-        actionTile_('run',     'Run',      false),
-        actionTile_('pullups', 'Pull-Ups', false),
-        actionTile_('walk',    'Walk',     false),
-      ]));
+      // Load the user's chosen modalities so tiles + goals adapt to them.
+      const profile = await sbLoadUserProfile().catch(() => null);
+      const modalities = userModalities_(profile);
+
+      // Action grid — one or more tiles per chosen modality.
+      const tiles = [];
+      modalities.forEach(id => {
+        (MODALITY_TILES[id] || []).forEach(t => {
+          tiles.push(actionTile_(t.view, t.label, t.iconKey, false));
+        });
+      });
+      if (!tiles.length) {
+        // Safety fallback if somehow no tiles resolved.
+        tiles.push(actionTile_('run', 'Run', 'run', false));
+      }
+      app.appendChild(el('div', { class: 'action-grid' }, tiles));
 
       // Stats from Supabase
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
@@ -2140,45 +2261,63 @@
         const stats = await sbStats();
         skel.remove();
 
-        // ── Weekly goals card (the main scoreboard) ──────────
-        const runCount  = stats.runs  ? (stats.runs.weekCount || 0)    : 0;
-        const liftCount = stats.lifts ? (stats.lifts.weekSessions || 0) : 0;
-        const runGoal   = stats.goals ? stats.goals.runs  : WEEKLY_RUN_GOAL_DEFAULT;
-        const liftGoal  = stats.goals ? stats.goals.lifts : WEEKLY_LIFT_GOAL_DEFAULT;
-        app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'Weekly goals'),
-          goalRow_('Runs',  runCount,  runGoal,  'runs'),
-          goalRow_('Lifts', liftCount, liftGoal, 'lifts'),
-        ]));
+        // ── Weekly goals card ──────────────────────────────
+        // One row per user modality. Row shows tap-to-set placeholder if no
+        // goal yet, or progress bar if one's set.
+        const goalsCard = el('div', { class: 'card' }, [el('h2', {}, 'Weekly goals')]);
+        const anyGoalSet = modalities.some(m => (stats.goals[m] || 0) > 0);
+        if (!anyGoalSet) {
+          goalsCard.appendChild(el('div', {
+            class: 'muted',
+            style: 'font-size: 13px; margin: 8px 0 12px;',
+          }, 'Tap any dashed number below to set a weekly target.'));
+        }
+        modalities.forEach(m => {
+          const count = stats.weekCounts[m] || 0;
+          const goal  = stats.goals[m] || 0;
+          goalsCard.appendChild(goalRow_(modalityLabel_(m), count, goal, m));
+        });
+        app.appendChild(goalsCard);
 
-        // ── Mileage stats ─────────────────────────────────────
-        app.appendChild(el('div', { class: 'stat-grid' }, [
-          el('div', { class: 'card' }, [
-            el('h2', {}, 'Miles this week'),
-            el('div', { class: 'big' }, String(stats.runs.week)),
-          ]),
-          el('div', { class: 'card' }, [
-            el('h2', {}, 'Miles YTD'),
-            el('div', { class: 'big' }, String(stats.runs.year)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
-          ]),
-        ]));
+        // ── Modality-specific stats ─────────────────────────
+        // Runners get miles cards. Not shown for non-runners.
+        if (modalities.includes('running')) {
+          app.appendChild(el('div', { class: 'stat-grid' }, [
+            el('div', { class: 'card' }, [
+              el('h2', {}, 'Miles this week'),
+              el('div', { class: 'big' }, String(stats.runs.week)),
+            ]),
+            el('div', { class: 'card' }, [
+              el('h2', {}, 'Miles YTD'),
+              el('div', { class: 'big' }, String(stats.runs.year)),
+              el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${stats.runs.yearCount} runs`),
+            ]),
+          ]));
+        }
 
-        // ── Pull-ups + month mileage ──────────────────────────
-        const puWk   = stats.pullups ? stats.pullups.weekSessions : 0;
-        const puReps = stats.pullups ? stats.pullups.weekReps : 0;
-        app.appendChild(el('div', { class: 'stat-grid' }, [
-          el('div', { class: 'card' }, [
+        // Strength users get a Pull-Ups detail card if they've logged any.
+        const puWk   = stats.pullups.weekSessions;
+        const puReps = stats.pullups.weekReps;
+        const rowCards = [];
+        if (modalities.includes('strength') && (puWk > 0 || puReps > 0)) {
+          rowCards.push(el('div', { class: 'card' }, [
             el('h2', {}, 'Pull-Ups'),
             el('div', { class: 'big' }, String(puWk)),
             el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${puReps} reps this week`),
-          ]),
-          el('div', { class: 'card' }, [
+          ]));
+        }
+        if (modalities.includes('running')) {
+          rowCards.push(el('div', { class: 'card' }, [
             el('h2', {}, 'This month'),
             el('div', { class: 'big' }, String(stats.runs.month)),
             el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'miles run'),
-          ]),
-        ]));
+          ]));
+        }
+        if (rowCards.length === 2) {
+          app.appendChild(el('div', { class: 'stat-grid' }, rowCards));
+        } else if (rowCards.length === 1) {
+          app.appendChild(rowCards[0]);
+        }
       } catch (e) {
         skel.remove();
       }
@@ -2190,16 +2329,23 @@
     const WEEKLY_RUN_GOAL_DEFAULT  = 4;
     const WEEKLY_LIFT_GOAL_DEFAULT = 3;
 
-    function goalRow_(label, done, goal, kind /* 'runs' | 'lifts' */) {
-      const safeGoal = Math.max(1, Number(goal) || 1);
-      const pct = Math.min(100, Math.round((done / safeGoal) * 100));
-      const isHit = done >= safeGoal;
+    // Renders a single modality's weekly goal row.
+    // - kind: modality id ('running', 'strength', 'cycling', etc.)
+    // - goal = 0 means "not set" — bar shows empty + target reads "—"
+    function goalRow_(label, done, goal, kind) {
+      const goalNum = Number(goal) || 0;
+      const hasGoal = goalNum > 0;
+      const pct = hasGoal ? Math.min(100, Math.round((done / goalNum) * 100)) : 0;
+      const isHit = hasGoal && done >= goalNum;
 
       const countEl = el('span', { class: 'goal-count' + (isHit ? ' hit' : '') });
       const renderRead = () => {
         countEl.innerHTML = '';
         countEl.appendChild(document.createTextNode(`${done} / `));
-        const goalSpan = el('span', { class: 'goal-target', title: 'Tap to edit target' }, String(safeGoal));
+        const goalSpan = el('span', {
+          class: 'goal-target',
+          title: hasGoal ? 'Tap to edit target' : 'Tap to set weekly target',
+        }, hasGoal ? String(goalNum) : '—');
         goalSpan.addEventListener('click', startEdit);
         countEl.appendChild(goalSpan);
       };
@@ -2213,7 +2359,8 @@
           class: 'goal-edit-input',
           min: '0',
           max: '99',
-          value: String(safeGoal),
+          placeholder: hasGoal ? '' : 'e.g. 3',
+          value: hasGoal ? String(goalNum) : '',
         });
         countEl.appendChild(input);
         input.focus();
@@ -2222,8 +2369,8 @@
           input.disabled = true;
           try {
             const newVal = await sbUpdateGoal(kind, input.value);
-            toast(`${label} goal: ${newVal}`);
-            render('home'); // refresh bar + status
+            toast(newVal > 0 ? `${label} goal: ${newVal}` : `${label} goal cleared`);
+            render('home');
           } catch (e) {
             toast('Could not save: ' + e.message, true);
             renderRead();
@@ -2256,17 +2403,35 @@
       return 'Lift';
     }
 
-    function actionTile_(view, label, isToday) {
+    function actionTile_(view, label, iconKeyOrIsToday, maybeIsToday) {
+      // Signature is a little permissive so old call-sites still work.
+      // New: actionTile_('lift', 'Lift', 'lift', false)  → 4 args, iconKey given
+      // Old: actionTile_('lift', 'Lift', false)          → 3 args, isToday given
+      let iconKey, isToday;
+      if (typeof iconKeyOrIsToday === 'string') {
+        iconKey = iconKeyOrIsToday;
+        isToday = !!maybeIsToday;
+      } else {
+        iconKey = view; // derive icon from view name (legacy)
+        isToday = !!iconKeyOrIsToday;
+      }
       const icons = {
         lift: '<path d="M5 8v8M3 10v4M19 8v8M21 10v4M5 12h14"/>',
         run: '<circle cx="13" cy="4" r="2"/><path d="M6 22l3-6 3 2 2-4 3 2M9 16l-1-5 4-3 3 3 2 2"/>',
         pullups: '<path d="M3 4h18M6 4v4a6 6 0 0 0 12 0V4"/><circle cx="12" cy="13" r="2"/><path d="M12 15v4M9 19h6"/>',
         walk: '<circle cx="13" cy="4" r="2"/><path d="M9 22l2-6 2.5 2 2-7M7.5 12.5l1.5-4 4 1 1.5 2.5 3-1"/>',
+        bike: '<circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M6 17l4-7h6l2 7M10 10l3-4h4M13 17h5"/>',
+        boot: '<path d="M6 4v10M6 14h6l3 3v3H4v-6zM9 14v-4h3l2 2"/>',
+        swim: '<path d="M2 10c2 0 3-2 5-2s3 2 5 2 3-2 5-2 3 2 5 2M2 16c2 0 3-2 5-2s3 2 5 2 3-2 5-2 3 2 5 2M2 22c2 0 3-2 5-2s3 2 5 2 3-2 5-2 3 2 5 2"/>',
+        row: '<circle cx="12" cy="5" r="2"/><path d="M4 14l8-2 8 2M6 20l6-4 6 4"/>',
+        yoga: '<circle cx="12" cy="5" r="2"/><path d="M12 7v6M6 13c2 0 4 2 6 2s4-2 6-2M8 21l4-6 4 6"/>',
+        star: '<path d="M12 3l2.5 6 6.5.5-5 4.5 1.5 6.5L12 17l-5.5 3.5L8 14l-5-4.5 6.5-.5z"/>',
       };
+      const iconMarkup = icons[iconKey] || icons.star;
       return el('button', {
         class: 'action-tile' + (isToday ? ' today' : ''),
         onclick: () => render(view),
-        html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[view]}</svg><span>${label}</span>`,
+        html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${iconMarkup}</svg><span>${label}</span>`,
       });
     }
 
@@ -2655,6 +2820,107 @@
       ]));
     }
 
+    // Generic activity logger — used for cycling, hiking, swimming, rowing,
+    // yoga, and "other". Distance is optional. Duration is optional.
+    // Type comes from the view name (e.g. 'activity-cycling' → 'cycling').
+    async function renderActivity(app, type) {
+      const label = modalityLabel_(type);
+      const showDistance = ['cycling', 'hiking', 'swimming', 'rowing'].includes(type);
+      const distUnit = type === 'swimming' ? 'yd' : 'mi';
+
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, `Log ${label}`),
+        el('span', { class: 'date' }, fmtDateLong(new Date())),
+      ]));
+
+      const card = el('div', { class: 'card' });
+
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Date'),
+        el('input', { id: 'actDate', type: 'date', value: todayISO() }),
+      ]));
+
+      if (showDistance) {
+        card.appendChild(el('div', { class: 'field' }, [
+          el('label', {}, `Distance (${distUnit}) — optional`),
+          el('input', {
+            id: 'actDist', type: 'number', step: '0.01', inputmode: 'decimal',
+            placeholder: type === 'swimming' ? '500' : '10',
+          }),
+        ]));
+      }
+
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Time — optional'),
+        el('div', { class: 'time-row' }, [
+          el('input', { id: 'actMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+          el('div', { class: 'sep' }, ':'),
+          el('input', { id: 'actSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+        ]),
+        el('div', { class: 'time-sub' }, [
+          el('div', {}, 'min'),
+          el('div', {}, ''),
+          el('div', {}, 'sec'),
+        ]),
+      ]));
+
+      // Intensity buttons — optional
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Intensity — optional'),
+        el('div', { class: 'pill-row', id: 'actIntensityRow' },
+          ['easy', 'moderate', 'hard', 'race'].map(lv => el('button', {
+            class: 'pill-btn',
+            'data-intensity': lv,
+            onclick: (e) => {
+              // toggle-select
+              const btns = e.target.parentElement.querySelectorAll('button');
+              btns.forEach(b => b.classList.remove('active'));
+              e.target.classList.add('active');
+            },
+          }, lv.charAt(0).toUpperCase() + lv.slice(1))),
+        ),
+      ]));
+
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Notes — optional'),
+        el('input', { id: 'actNotes', type: 'text', placeholder: type === 'yoga' ? 'Flow, restorative, hot, etc.' : 'How it felt, route, etc.' }),
+      ]));
+
+      card.appendChild(el('button', {
+        onclick: async () => {
+          const date = $('#actDate').value;
+          if (!date) return toast('Date required', true);
+          const minRaw = $('#actMin').value.trim();
+          const secRaw = $('#actSec').value.trim();
+          const durSecs = (Number(minRaw) || 0) * 60 + (Number(secRaw) || 0);
+          const distance = showDistance ? Number($('#actDist').value) : null;
+          const intensityBtn = document.querySelector('#actIntensityRow .pill-btn.active');
+          const intensity = intensityBtn ? intensityBtn.getAttribute('data-intensity') : null;
+          const notes = $('#actNotes').value.trim();
+
+          if (!durSecs && !distance) {
+            return toast('Add at least a time or a distance', true);
+          }
+
+          try {
+            await sbLogActivity({
+              type, date,
+              duration_secs: durSecs || null,
+              distance:      distance || null,
+              intensity,
+              notes,
+            });
+            toast(`${label} logged!`);
+            setTimeout(() => render('home'), 900);
+          } catch (e) {
+            toast('Could not save: ' + e.message, true);
+          }
+        },
+      }, `Log ${label.toLowerCase()}`));
+
+      app.appendChild(card);
+    }
+
     async function renderPullUps(app) {
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Pull-Ups'),
@@ -2798,10 +3064,30 @@
         analyticsYearFilter = data.filter;
       } catch (e) {
         skel.remove();
-        app.appendChild(el('div', { class: 'card' }, 'Could not load analytics: ' + e.message));
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Could not load'),
+          el('div', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            'Analytics failed to load: ' + e.message),
+        ]));
         return;
       }
       skel.remove();
+
+      // Friendly empty state when there are no runs at all.
+      if (!data.summary || !data.summary.runs) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Nothing to analyze yet'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
+            'Analytics currently shows run history — total miles, pace trends, best efforts, and monthly breakdown. Log your first run to see it come alive.'),
+          el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px; line-height: 1.5;' },
+            'Analytics for other modalities (strength volume, ride time, etc.) is on the roadmap.'),
+          el('button', {
+            style: 'margin-top: 16px;',
+            onclick: () => render('run'),
+          }, 'Log a run'),
+        ]));
+        return;
+      }
 
       // Year filter segmented control
       const seg = el('div', { class: 'seg' });
@@ -3104,6 +3390,77 @@
       const m = String(s).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
       if (m && m[3] === '00') return `${m[1]}:${m[2]}`;
       return String(s);
+    }
+
+    // -------- Feedback screen --------
+    // Simple form: optional rating + required message. Writes to feedback
+    // table with a bit of automatic context so Jeff can triage.
+    let _feedbackContextView = null; // captures the tab the user was on
+
+    async function renderFeedback(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Send feedback')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { _feedbackContextView = null; render('profile'); },
+      }, '← Back'));
+
+      let selectedRating = 0;
+      const ratingRow = el('div', { class: 'feedback-rating' });
+      const starButtons = [];
+      for (let i = 1; i <= 5; i++) {
+        const btn = el('button', {
+          class: 'feedback-star',
+          'data-rating': String(i),
+          onclick: () => {
+            selectedRating = i;
+            starButtons.forEach((b, idx) => {
+              b.classList.toggle('on', (idx + 1) <= i);
+            });
+          },
+        }, '★');
+        starButtons.push(btn);
+        ratingRow.appendChild(btn);
+      }
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-bottom: 14px;' },
+          "Anything broken? Confusing? Missing? Tell me. I read every one."),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Rate the experience — optional'),
+          ratingRow,
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Your message'),
+          el('textarea', {
+            id: 'fbMessage',
+            rows: '5',
+            style: 'width: 100%; padding: 12px; font-size: 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; resize: vertical; font-family: inherit;',
+            placeholder: 'What did you love? What broke? What would you change?',
+          }),
+        ]),
+        el('button', {
+          onclick: async () => {
+            const msg = ($('#fbMessage').value || '').trim();
+            if (!msg) return toast('Add a message first', true);
+            try {
+              await sbSendFeedback({
+                rating: selectedRating || null,
+                message: msg,
+                contextView: _feedbackContextView || 'profile',
+              });
+              toast('Feedback sent — thanks');
+              _feedbackContextView = null;
+              setTimeout(() => render('profile'), 900);
+            } catch (e) {
+              toast('Could not send: ' + (e.message || e), true);
+            }
+          },
+        }, 'Send'),
+      ]));
+
+      app.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; text-align: center; margin-top: 12px;' },
+        `App ${APP_VERSION} · Auto-included: which screen you came from + your email`));
     }
 
     // -------- Lift Session detail screen --------
@@ -3686,6 +4043,29 @@
       { id: 'other',    label: 'Other',     desc: 'CrossFit, climbing, martial arts, everything else', icon: '⭐' },
     ];
 
+    // Which loggers appear on Home for each modality. Strength has two
+    // (Lift + Pull-Ups) because pull-ups are strength but have their own
+    // logging shape; the rest have one each.
+    const MODALITY_TILES = {
+      strength: [
+        { view: 'lift',    label: 'Lift',     iconKey: 'lift' },
+        { view: 'pullups', label: 'Pull-Ups', iconKey: 'pullups' },
+      ],
+      running:  [{ view: 'run',                  label: 'Run',   iconKey: 'run' }],
+      walking:  [{ view: 'walk',                 label: 'Walk',  iconKey: 'walk' }],
+      cycling:  [{ view: 'activity-cycling',     label: 'Ride',  iconKey: 'bike' }],
+      hiking:   [{ view: 'activity-hiking',      label: 'Hike',  iconKey: 'boot' }],
+      swimming: [{ view: 'activity-swimming',    label: 'Swim',  iconKey: 'swim' }],
+      rowing:   [{ view: 'activity-rowing',      label: 'Row',   iconKey: 'row'  }],
+      yoga:     [{ view: 'activity-yoga',        label: 'Yoga',  iconKey: 'yoga' }],
+      other:    [{ view: 'activity-other',       label: 'Other', iconKey: 'star' }],
+    };
+
+    function modalityLabel_(id) {
+      const m = MODALITIES.find(x => x.id === id);
+      return m ? m.label : id;
+    }
+
     // Cache the profile row for the session.
     let _userProfileCache = null;
 
@@ -4106,6 +4486,20 @@
       app.appendChild(el('div', { class: 'card' }, [
         el('h2', {}, 'Body weight'),
         el('div', { class: 'muted', style: 'font-size: 14px;' }, 'Next iteration: weigh-in log with weekly delta. Send me the green light when you want it wired up.'),
+      ]));
+
+      // Feedback — beta essential. Direct line to Jeff.
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', {}, 'Feedback'),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; margin-bottom: 14px;' },
+          "Bugs, ideas, complaints, wins — anything. I read every one."),
+        el('button', {
+          style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          onclick: () => {
+            _feedbackContextView = currentView || 'profile';
+            render('feedback');
+          },
+        }, 'Send feedback'),
       ]));
 
       // Account / sign out
