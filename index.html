@@ -1589,12 +1589,19 @@
       const uid = currentUser.id;
       let q = _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).order('date');
       if (yearFilter !== 'all') q = q.gte('date', `${yearFilter}-01-01`).lte('date', `${yearFilter}-12-31`);
-      const { data, error } = await q;
-      if (error) throw new Error(error.message);
-      const runs = data || [];
+
+      // availableYears must span ALL runs the user has, not just the filtered
+      // slice — otherwise picking 2024 hides every other year from the
+      // segment control. Fetch dates unfiltered in parallel.
+      const [filteredR, allDatesR] = await Promise.all([
+        q,
+        _sb.from('runs').select('date').eq('user_id', uid),
+      ]);
+      if (filteredR.error) throw new Error(filteredR.error.message);
+      const runs = filteredR.data || [];
       const totalMi = runs.reduce((s, r) => s + Number(r.distance), 0);
-      const yearSet = new Set(runs.map(r => Number(r.date.slice(0, 4))));
-      const availableYears = [...yearSet].sort((a, b) => b - a);
+      const allYearSet = new Set((allDatesR.data || []).map(r => Number(r.date.slice(0, 4))));
+      const availableYears = [...allYearSet].sort((a, b) => b - a);
       const pRuns = runs.filter(r => r.pace);
       let avgPaceSecs = null;
       if (pRuns.length) {
@@ -2391,27 +2398,28 @@
     // Renders the "YTD" card with a segmented filter across the user's
     // picked distance-having modalities. Falls back to a single unfiltered
     // card when the user only has one distance modality.
+    //
+    // When the user taps a segment, we swap the card's inner contents in
+    // place rather than triggering a full render('home') round-trip. That
+    // makes the filter feel instant.
     function renderYtdCard_(app, modalities, stats) {
-      // Only distance-having modalities show up.
       const mileMods = ['running', 'walking', 'cycling', 'hiking'];
       const otherUnitMods = { swimming: 'yd', rowing: 'm' };
       const availableMileMods = mileMods.filter(m => modalities.includes(m));
       const availableOtherUnit = Object.keys(otherUnitMods).filter(m => modalities.includes(m));
       const allDistanceMods = [...availableMileMods, ...availableOtherUnit];
-      if (allDistanceMods.length === 0) return; // nothing to show
+      if (allDistanceMods.length === 0) return;
 
       const labels = { running: 'Run', walking: 'Walk', cycling: 'Ride', hiking: 'Hike', swimming: 'Swim', rowing: 'Row' };
       const nounPlural = { running: 'runs', walking: 'walks', cycling: 'rides', hiking: 'hikes', swimming: 'swims', rowing: 'rows' };
       const unitFor = (m) => otherUnitMods[m] || 'mi';
 
-      // Reset filter to 'total' if the currently-selected mod isn't
-      // available anymore (user changed modalities).
+      // Reset filter if the currently-selected mod isn't available anymore.
       if (_ytdFilterMod !== 'total' && !allDistanceMods.includes(_ytdFilterMod)) {
         _ytdFilterMod = 'total';
       }
 
-      // If user only has ONE distance modality, skip the filter — just
-      // show that modality's card directly.
+      // Single distance modality → skip the filter, show a simple card.
       if (allDistanceMods.length === 1) {
         const only = allDistanceMods[0];
         const dist = stats.yearDistances[only] || 0;
@@ -2424,44 +2432,61 @@
         return;
       }
 
-      // Segment list — 'total' first if we have any mile-based modalities,
-      // then each individual modality.
       const segments = [];
       if (availableMileMods.length > 1) segments.push({ key: 'total', label: 'Total' });
       allDistanceMods.forEach(m => segments.push({ key: m, label: labels[m] }));
 
-      const seg = el('div', { class: 'seg' });
+      // Compute values for a given filter key.
+      const valuesFor = (filterKey) => {
+        if (filterKey === 'total') {
+          const sumMiles = availableMileMods.reduce((s, m) => s + (stats.yearDistances[m] || 0), 0);
+          return {
+            title: 'Distance YTD',
+            big: String(Math.round(sumMiles * 10) / 10) + ' mi',
+            subtitle: availableMileMods
+              .map(m => `${stats.yearCounts[m] || 0} ${nounPlural[m]}`)
+              .join(' · '),
+          };
+        }
+        const m = filterKey;
+        return {
+          title: `${labels[m]} YTD`,
+          big: String(stats.yearDistances[m] || 0) + ' ' + unitFor(m),
+          subtitle: `${stats.yearCounts[m] || 0} ${nounPlural[m]}`,
+        };
+      };
+
+      // Build the card shell + inner elements we'll update on tap.
+      const titleEl    = el('h2', {}, '');
+      const segEl      = el('div', { class: 'seg' });
+      const bigEl      = el('div', { class: 'big' }, '');
+      const subtitleEl = el('div', { class: 'muted', style: 'margin-top: 4px;' }, '');
+
+      const applyFilter = (key) => {
+        _ytdFilterMod = key;
+        const v = valuesFor(key);
+        titleEl.textContent    = v.title;
+        bigEl.textContent      = v.big;
+        subtitleEl.textContent = v.subtitle;
+        // Update active class on segment buttons — no full DOM rebuild.
+        Array.from(segEl.children).forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.key === key);
+        });
+      };
+
       segments.forEach(s => {
-        seg.appendChild(el('button', {
-          class: (_ytdFilterMod === s.key) ? 'active' : '',
-          onclick: () => { _ytdFilterMod = s.key; render('home'); },
-        }, s.label));
+        const btn = el('button', {
+          'data-key': s.key,
+          onclick: () => applyFilter(s.key),
+        }, s.label);
+        segEl.appendChild(btn);
       });
 
-      // Compute the shown values based on filter.
-      let big, subtitle;
-      if (_ytdFilterMod === 'total') {
-        const sumMiles = availableMileMods.reduce((s, m) => s + (stats.yearDistances[m] || 0), 0);
-        const totalCount = availableMileMods.reduce((s, m) => s + (stats.yearCounts[m] || 0), 0);
-        big = String(Math.round(sumMiles * 10) / 10) + ' mi';
-        subtitle = availableMileMods
-          .map(m => `${stats.yearCounts[m] || 0} ${nounPlural[m]}`)
-          .join(' · ');
-      } else {
-        const m = _ytdFilterMod;
-        const dist = stats.yearDistances[m] || 0;
-        const count = stats.yearCounts[m] || 0;
-        big = String(dist) + ' ' + unitFor(m);
-        subtitle = `${count} ${nounPlural[m]}`;
-      }
-
-      const card = el('div', { class: 'card' }, [
-        el('h2', {}, _ytdFilterMod === 'total' ? 'Distance YTD' : `${labels[_ytdFilterMod]} YTD`),
-        seg,
-        el('div', { class: 'big' }, big),
-        el('div', { class: 'muted', style: 'margin-top: 4px;' }, subtitle),
-      ]);
+      const card = el('div', { class: 'card' }, [titleEl, segEl, bigEl, subtitleEl]);
       app.appendChild(card);
+
+      // Set initial state.
+      applyFilter(_ytdFilterMod);
     }
 
     // Renders a single modality's weekly goal row.
