@@ -3851,7 +3851,12 @@
       app.appendChild(el('button', {
         class: 'btn-link',
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
-        onclick: () => { window.history.length > 1 ? window.history.back() : render('calendar'); },
+        onclick: () => {
+          // Go back to the session detail we came from (if we still have
+          // its ref), otherwise fall back to the Calendar list view.
+          if (_liftSessionRef) render('lift-session');
+          else render('calendar');
+        },
       }, '← Back'));
 
       if (!name) {
