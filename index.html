@@ -3212,30 +3212,98 @@
     let analyticsYearFilter = null; // persists across re-renders
 
     async function renderAnalytics(app) {
+      // Header + segment control stay persistent across filter changes.
+      // Only the data-dependent card region below re-renders on tap, so
+      // the year filter feels like flipping a switch rather than reloading
+      // the page.
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Analytics')]));
 
-      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
-      app.appendChild(skel);
+      // Segment container — populated after first data fetch (once we know
+      // the available years). Persistent thereafter.
+      const seg = el('div', { class: 'seg' });
+      app.appendChild(seg);
 
-      let data;
-      try {
-        const filter = analyticsYearFilter || String(new Date().getFullYear());
-        data = await sbAnalytics(filter);
-        analyticsYearFilter = data.filter;
-      } catch (e) {
-        skel.remove();
-        app.appendChild(el('div', { class: 'card' }, [
+      // Data container — its innerHTML gets replaced on each filter tap.
+      const dataContainer = el('div', { id: 'analyticsData' });
+      app.appendChild(dataContainer);
+
+      // Initial skeleton
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
+      dataContainer.appendChild(skel);
+
+      // Build the segment control given a set of available years.
+      // (Called once — segment content doesn't change between filter taps.)
+      let availableYearsCache = null;
+      const buildSegments = (availableYears) => {
+        seg.innerHTML = '';
+        const years = (availableYears || []).slice();
+        const thisYr = new Date().getFullYear();
+        if (!years.includes(thisYr)) years.unshift(thisYr);
+        years.sort((a, b) => b - a);
+        const options = years.map(String).concat(['all']);
+        options.forEach(opt => {
+          seg.appendChild(el('button', {
+            'data-opt': opt,
+            class: analyticsYearFilter === opt ? 'active' : '',
+            onclick: () => selectYear(opt),
+          }, opt === 'all' ? 'All Time' : opt));
+        });
+      };
+
+      // Called when the user taps a segment. Updates active class, shows
+      // a skeleton in the data container, fetches, then swaps in results.
+      const selectYear = async (opt) => {
+        analyticsYearFilter = opt;
+        // Toggle active class on segment buttons in place.
+        Array.from(seg.children).forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.opt === opt);
+        });
+        // Skeleton in the data container while we fetch.
+        dataContainer.innerHTML = '';
+        dataContainer.appendChild(el('div', { class: 'card' },
+          el('div', { class: 'skeleton', style: 'height: 100px;' })));
+        let data;
+        try { data = await sbAnalytics(opt); }
+        catch (e) {
+          dataContainer.innerHTML = '';
+          dataContainer.appendChild(el('div', { class: 'card' }, [
+            el('h2', {}, 'Could not load'),
+            el('div', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+              'Analytics failed to load: ' + e.message),
+          ]));
+          return;
+        }
+        renderAnalyticsData_(dataContainer, data);
+      };
+
+      // First fetch — using whatever filter is currently persisted.
+      const initialFilter = analyticsYearFilter || String(new Date().getFullYear());
+      analyticsYearFilter = initialFilter;
+      let firstData;
+      try { firstData = await sbAnalytics(initialFilter); }
+      catch (e) {
+        dataContainer.innerHTML = '';
+        dataContainer.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Could not load'),
           el('div', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
             'Analytics failed to load: ' + e.message),
         ]));
         return;
       }
-      skel.remove();
+      analyticsYearFilter = firstData.filter;
+      availableYearsCache = firstData.availableYears;
+      buildSegments(availableYearsCache);
+      renderAnalyticsData_(dataContainer, firstData);
+    }
+
+    // Renders the data-dependent portion of the Analytics tab into the
+    // given container. Called on first load AND on every filter tap.
+    function renderAnalyticsData_(container, data) {
+      container.innerHTML = '';
 
       // Friendly empty state when there are no runs at all.
       if (!data.summary || !data.summary.runs) {
-        app.appendChild(el('div', { class: 'card' }, [
+        container.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Nothing to analyze yet'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
             'Analytics currently shows run history — total miles, pace trends, best efforts, and monthly breakdown. Log your first run to see it come alive.'),
@@ -3249,28 +3317,9 @@
         return;
       }
 
-      // Year filter segmented control
-      const seg = el('div', { class: 'seg' });
-      const years = (data.availableYears || []).slice();
-      const thisYr = new Date().getFullYear();
-      if (!years.includes(thisYr)) years.unshift(thisYr);
-      years.sort((a, b) => b - a);
-      const options = years.map(String).concat(['all']);
-      options.forEach(opt => {
-        const isActive = String(data.filter) === opt;
-        seg.appendChild(el('button', {
-          class: isActive ? 'active' : '',
-          onclick: async () => {
-            analyticsYearFilter = opt;
-            render('analytics');
-          },
-        }, opt === 'all' ? 'All Time' : opt));
-      });
-      app.appendChild(seg);
-
       // Summary stat grid
       const s = data.summary;
-      app.appendChild(el('div', { class: 'stat-grid' }, [
+      container.appendChild(el('div', { class: 'stat-grid' }, [
         el('div', { class: 'card' }, [
           el('h2', {}, 'Total miles'),
           el('div', { class: 'big' }, String(s.miles)),
@@ -3282,7 +3331,7 @@
           el('div', { class: 'muted', style: 'margin-top: 4px;' }, '/mi'),
         ]),
       ]));
-      app.appendChild(el('div', { class: 'stat-grid' }, [
+      container.appendChild(el('div', { class: 'stat-grid' }, [
         el('div', { class: 'card' }, [
           el('h2', {}, 'Avg distance'),
           el('div', { class: 'big' }, String(s.avgDistance)),
@@ -3311,7 +3360,7 @@
             el('div', { style: 'font-size: 11px; color: var(--muted); margin-left: 46px; margin-top: 2px;' }, meta),
           ]));
         });
-        app.appendChild(monthlyCard);
+        container.appendChild(monthlyCard);
       }
 
       // Year over year (always shown, especially useful for All Time)
@@ -3326,7 +3375,7 @@
             el('div', { class: 'val' }, y.miles ? String(y.miles) + ' mi' : '—'),
           ]));
         });
-        app.appendChild(yoyCard);
+        container.appendChild(yoyCard);
       }
     }
 
