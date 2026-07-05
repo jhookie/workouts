@@ -486,11 +486,13 @@
 
     /* History list */
     .history-row {
-      cursor: pointer;
       padding: 12px 16px;
       transition: border-color 120ms ease;
     }
-    .history-row:active { border-color: var(--accent); }
+    .history-row.clickable {
+      cursor: pointer;
+    }
+    .history-row.clickable:active { border-color: var(--accent); }
     .history-head {
       display: flex;
       justify-content: space-between;
@@ -502,6 +504,23 @@
       font-weight: 600;
       color: var(--text);
     }
+    .history-tag {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-right: 6px;
+      vertical-align: middle;
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .history-tag.tag-lift     { background: #3a1a0d; color: #ff9b7a; }
+    .history-tag.tag-run      { background: #0d2a3a; color: #7ab7ff; }
+    .history-tag.tag-walk     { background: #0d3a2a; color: #7ade95; }
+    .history-tag.tag-pullups  { background: #0d3a24; color: #7affb7; }
+    .history-tag.tag-activity { background: #2a1a3a; color: #b47aff; }
     .session-ex-head {
       display: flex;
       justify-content: space-between;
@@ -2258,6 +2277,7 @@
       else if (view === 'onboarding') await renderOnboarding(app);
       else if (view && view.startsWith('activity-')) await renderActivity(app, view.slice('activity-'.length));
       else if (view === 'feedback') await renderFeedback(app);
+      else if (view === 'body-weight') await renderBodyWeight(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -3477,15 +3497,41 @@
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
       app.appendChild(skel);
 
-      let sessions;
+      let rows = [];
       try {
-        const { data, error } = await _sb.from('lift_sessions')
-          .select('date,block_name,week,day,exercises,notes')
-          .eq('user_id', currentUser.id)
-          .order('date', { ascending: false })
-          .limit(200);
-        if (error) throw new Error(error.message);
-        sessions = data || [];
+        const uid = currentUser.id;
+        const [liftsR, runsR, walksR, pullsR, actsR] = await Promise.all([
+          _sb.from('lift_sessions')
+            .select('date,block_name,week,day,exercises,notes')
+            .eq('user_id', uid).order('date', { ascending: false }).limit(200),
+          _sb.from('runs')
+            .select('date,distance,duration_secs,pace,notes,shoe_id')
+            .eq('user_id', uid).order('date', { ascending: false }).limit(200),
+          _sb.from('walks')
+            .select('date,distance,duration_secs,notes')
+            .eq('user_id', uid).order('date', { ascending: false }).limit(200),
+          _sb.from('pullup_sessions')
+            .select('date,sets,total_reps,notes')
+            .eq('user_id', uid).order('date', { ascending: false }).limit(200),
+          _sb.from('activities')
+            .select('date,activity_type,duration_secs,distance,intensity,notes')
+            .eq('user_id', uid).order('date', { ascending: false }).limit(200),
+        ]);
+
+        (liftsR.data || []).forEach(s => rows.push(normalizeLiftRow_(s)));
+        (runsR.data  || []).forEach(r => rows.push(normalizeRunRow_(r)));
+        (walksR.data || []).forEach(w => rows.push(normalizeWalkRow_(w)));
+        (pullsR.data || []).forEach(p => rows.push(normalizePullupRow_(p)));
+        (actsR.data  || []).forEach(a => rows.push(normalizeActivityRow_(a)));
+
+        // Sort: newest date first; ties broken by kind order (lifts before
+        // runs before walks etc.) so a day with multiple sessions reads
+        // consistently.
+        const kindOrder = { lift: 0, run: 1, pullups: 2, walk: 3, activity: 4 };
+        rows.sort((a, b) => {
+          if (a.date !== b.date) return b.date.localeCompare(a.date);
+          return (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9);
+        });
       } catch (e) {
         skel.remove();
         app.appendChild(el('div', { class: 'card' }, 'Could not load history: ' + e.message));
@@ -3493,20 +3539,20 @@
       }
       skel.remove();
 
-      if (!sessions.length) {
+      if (!rows.length) {
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'No lift sessions yet'),
+          el('h2', {}, 'No sessions yet'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
-            'Once you log a few lifts, they\'ll appear here. Each row jumps to the full session detail.'),
+            "Once you log a session — any modality — it'll appear here. Recent first, grouped by month."),
         ]));
         return;
       }
 
-      // Group by month for visual structure.
+      // Group by month.
       const monthBuckets = {};
-      sessions.forEach(s => {
-        const ym = (s.date || '').slice(0, 7);
-        (monthBuckets[ym] = monthBuckets[ym] || []).push(s);
+      rows.forEach(r => {
+        const ym = r.date.slice(0, 7);
+        (monthBuckets[ym] = monthBuckets[ym] || []).push(r);
       });
       const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -3514,35 +3560,128 @@
         const [y, m] = ym.split('-').map(Number);
         const label = `${monthNames[m - 1]} ${y}`;
         app.appendChild(el('h2', { class: 'section-h' }, label));
-        const bucket = monthBuckets[ym];
-        bucket.forEach(s => {
-          const exArr = Array.isArray(s.exercises) ? s.exercises : [];
-          const exCount = exArr.length;
-          const totalReps = exArr.reduce((tot, ex) => {
-            return tot + [ex.r1, ex.r2, ex.r3, ex.r4].reduce((sum, v) => sum + (Number(v) || 0), 0);
-          }, 0);
-          const wd = new Date(s.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
-          const preview = exArr.slice(0, 3).map(ex => ex.name).join(' · ') + (exArr.length > 3 ? ` · +${exArr.length - 3} more` : '');
-          app.appendChild(el('div', {
-            class: 'card history-row',
-            onclick: () => {
-              _liftSessionRef = { date: s.date, day: s.day };
-              render('lift-session');
-            },
-          }, [
-            el('div', { class: 'history-head' }, [
-              el('div', {}, [
-                el('div', { class: 'history-date' }, `${wd} · ${s.date}`),
-                el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' },
-                  `${s.block_name || '—'} · Wk ${s.week || '—'} · Day ${s.day || '—'}`),
-              ]),
-              el('div', { class: 'muted', style: 'font-size: 12px; text-align: right; white-space: nowrap;' },
-                `${exCount} ex · ${totalReps} reps`),
-            ]),
-            preview ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;' }, preview) : null,
-          ]));
+        monthBuckets[ym].forEach(row => {
+          app.appendChild(renderHistoryRow_(row));
         });
       });
+    }
+
+    // ── History-row normalizers ─────────────────────────────
+    // Each turns a raw Supabase row into { date, kind, tag, tagColor,
+    // primary, subtitle, right, onClick } used by renderHistoryRow_.
+
+    function normalizeLiftRow_(s) {
+      const exArr = Array.isArray(s.exercises) ? s.exercises : [];
+      const exCount = exArr.length;
+      const totalReps = exArr.reduce((tot, ex) =>
+        tot + [ex.r1, ex.r2, ex.r3, ex.r4].reduce((sum, v) => sum + (Number(v) || 0), 0), 0);
+      const preview = exArr.slice(0, 3).map(ex => ex.name).join(' · ') +
+                      (exArr.length > 3 ? ` · +${exArr.length - 3} more` : '');
+      return {
+        date: s.date,
+        kind: 'lift',
+        tag: 'LIFT',
+        tagColor: 'lift',
+        primary: `${s.block_name || '—'} · Day ${s.day || '—'}${s.week ? ' · Wk ' + s.week : ''}`,
+        subtitle: preview,
+        right: `${exCount} ex · ${totalReps} reps`,
+        onClick: () => {
+          _liftSessionRef = { date: s.date, day: s.day };
+          render('lift-session');
+        },
+      };
+    }
+
+    function normalizeRunRow_(r) {
+      const dist = Number(r.distance) || 0;
+      const dur  = Number(r.duration_secs) || 0;
+      const time = dur ? `${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}` : '';
+      return {
+        date: r.date,
+        kind: 'run',
+        tag: 'RUN',
+        tagColor: 'run',
+        primary: [dist ? `${dist} mi` : '', time].filter(Boolean).join(' · '),
+        subtitle: [r.pace ? `${r.pace}/mi` : '', r.notes].filter(Boolean).join(' · '),
+        right: '',
+        onClick: null,
+      };
+    }
+
+    function normalizeWalkRow_(w) {
+      const dist = Number(w.distance) || 0;
+      const dur  = Number(w.duration_secs) || 0;
+      const time = dur ? `${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}` : '';
+      return {
+        date: w.date,
+        kind: 'walk',
+        tag: 'WALK',
+        tagColor: 'walk',
+        primary: [dist ? `${dist} mi` : '', time].filter(Boolean).join(' · '),
+        subtitle: w.notes || '',
+        right: '',
+        onClick: null,
+      };
+    }
+
+    function normalizePullupRow_(p) {
+      const setsArr = Array.isArray(p.sets) ? p.sets.filter(v => v != null && v !== '') : [];
+      return {
+        date: p.date,
+        kind: 'pullups',
+        tag: 'PULL-UPS',
+        tagColor: 'pullups',
+        primary: `${p.total_reps || 0} reps`,
+        subtitle: setsArr.length ? setsArr.join(' / ') : (p.notes || ''),
+        right: '',
+        onClick: null,
+      };
+    }
+
+    function normalizeActivityRow_(a) {
+      const activityLabels = {
+        cycling: 'RIDE', hiking: 'HIKE', swimming: 'SWIM',
+        rowing: 'ROW', yoga: 'YOGA', other: 'OTHER',
+      };
+      const distUnit = { swimming: 'yd', rowing: 'm' }[a.activity_type] || 'mi';
+      const dist = Number(a.distance) || 0;
+      const dur  = Number(a.duration_secs) || 0;
+      const time = dur ? `${Math.floor(dur/60)}:${String(dur%60).padStart(2,'0')}` : '';
+      const parts = [];
+      if (dist) parts.push(`${dist} ${distUnit}`);
+      if (time) parts.push(time);
+      return {
+        date: a.date,
+        kind: 'activity',
+        tag: activityLabels[a.activity_type] || String(a.activity_type || 'ACTIVITY').toUpperCase(),
+        tagColor: 'activity',
+        primary: parts.join(' · ') || '—',
+        subtitle: [a.intensity, a.notes].filter(Boolean).join(' · '),
+        right: '',
+        onClick: null,
+      };
+    }
+
+    // Render a single history row.
+    function renderHistoryRow_(row) {
+      const wd = new Date(row.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+      const card = el('div', {
+        class: 'card history-row' + (row.onClick ? ' clickable' : ''),
+        onclick: row.onClick || null,
+      }, [
+        el('div', { class: 'history-head' }, [
+          el('div', {}, [
+            el('div', { class: 'history-date' }, [
+              el('span', { class: `history-tag tag-${row.tagColor}` }, row.tag),
+              document.createTextNode(` ${wd} · ${row.date}`),
+            ]),
+            row.primary ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' }, row.primary) : null,
+          ]),
+          row.right ? el('div', { class: 'muted', style: 'font-size: 12px; text-align: right; white-space: nowrap;' }, row.right) : null,
+        ]),
+        row.subtitle ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px;' }, row.subtitle) : null,
+      ]);
+      return card;
     }
 
     function selectCalendarDay(day) {
@@ -4509,6 +4648,167 @@
       ]));
     }
 
+    // -------- Body weight tracking --------
+    async function sbLogBodyWeight({ date, weight_lbs, notes }) {
+      const uid = currentUser.id;
+      const row = {
+        user_id: uid,
+        date,
+        weight_lbs: Number(weight_lbs),
+        notes: notes || null,
+      };
+      // Simple dedup: replace any existing entry for the same date rather
+      // than inserting a second one.
+      const { data: existing } = await _sb.from('body_weight_log')
+        .select('id').eq('user_id', uid).eq('date', date).limit(1);
+      if (existing && existing.length) {
+        const { error } = await _sb.from('body_weight_log')
+          .update(row).eq('id', existing[0].id);
+        if (error) throw new Error(error.message);
+        return { ok: true, updated: true };
+      }
+      const { error } = await _sb.from('body_weight_log').insert(row);
+      if (error) throw new Error(error.message);
+      return { ok: true, inserted: true };
+    }
+
+    async function sbGetBodyWeightEntries(limit = 90) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('body_weight_log')
+        .select('date,weight_lbs,notes')
+        .eq('user_id', uid)
+        .order('date', { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(error.message);
+      return data || [];
+    }
+
+    async function renderBodyWeight(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Body weight')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('profile'),
+      }, '← Back to profile'));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let entries;
+      try { entries = await sbGetBodyWeightEntries(90); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load body weight: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      // Stat cards (only if we have data)
+      if (entries.length) {
+        const latest = entries[0];
+        // Find an entry from ~7 days ago for weekly delta
+        const oneWeekAgo = new Date(); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        const oneWeekAgoISO = oneWeekAgo.toISOString().slice(0, 10);
+        const weekAgoEntry = entries.find(e => e.date <= oneWeekAgoISO) || entries[entries.length - 1];
+        const weekDelta = latest.weight_lbs - weekAgoEntry.weight_lbs;
+
+        // Monthly delta
+        const oneMonthAgo = new Date(); oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
+        const oneMonthAgoISO = oneMonthAgo.toISOString().slice(0, 10);
+        const monthAgoEntry = entries.find(e => e.date <= oneMonthAgoISO) || entries[entries.length - 1];
+        const monthDelta = latest.weight_lbs - monthAgoEntry.weight_lbs;
+
+        const deltaLabel = (d) => {
+          if (Math.abs(d) < 0.05) return 'flat';
+          const sign = d > 0 ? '+' : '';
+          return `${sign}${d.toFixed(1)} lb`;
+        };
+
+        app.appendChild(el('div', { class: 'stat-grid' }, [
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Current'),
+            el('div', { class: 'big' }, `${latest.weight_lbs} lb`),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `as of ${latest.date}`),
+          ]),
+          el('div', { class: 'card' }, [
+            el('h2', {}, '7-day'),
+            el('div', { class: 'big' }, deltaLabel(weekDelta)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, `vs ${weekAgoEntry.date}`),
+          ]),
+        ]));
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, '30-day'),
+          el('div', { class: 'big' }, deltaLabel(monthDelta)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `vs ${monthAgoEntry.date}`),
+        ]));
+
+        // Trend line — reuse the SVG renderer from exercise progression
+        const trendPoints = entries.slice().reverse().map(e => ({
+          date: e.date,
+          weight: Number(e.weight_lbs),
+        })).filter(p => isFinite(p.weight));
+        if (trendPoints.length >= 2) {
+          app.appendChild(el('div', { class: 'card' }, [
+            el('h2', {}, 'Weight over time'),
+            renderTrendLine_(trendPoints),
+          ]));
+        }
+      }
+
+      // Log form
+      const logCard = el('div', { class: 'card' }, [
+        el('h2', {}, entries.length ? 'Log a new weigh-in' : 'Log your first weigh-in'),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Date'),
+          el('input', { id: 'bwDate', type: 'date', value: todayISO() }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Weight (lb)'),
+          el('input', {
+            id: 'bwWeight', type: 'number', step: '0.1', inputmode: 'decimal',
+            placeholder: 'e.g. 175.5',
+          }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Notes — optional'),
+          el('input', { id: 'bwNotes', type: 'text', placeholder: 'Post-workout, morning, etc.' }),
+        ]),
+        el('button', {
+          onclick: async () => {
+            const date = $('#bwDate').value;
+            const weight = Number($('#bwWeight').value);
+            const notes = $('#bwNotes').value.trim();
+            if (!date || !weight || weight <= 0) return toast('Date and weight required', true);
+            try {
+              const res = await sbLogBodyWeight({ date, weight_lbs: weight, notes });
+              toast(res.updated ? 'Weight updated' : 'Weight logged');
+              render('body-weight');
+            } catch (e) {
+              toast('Could not save: ' + (e.message || e), true);
+            }
+          },
+        }, 'Save weigh-in'),
+      ]);
+      app.appendChild(logCard);
+
+      // Recent list
+      if (entries.length) {
+        const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent')]);
+        entries.slice(0, 30).forEach(e => {
+          list.appendChild(el('div', {
+            style: 'padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;',
+          }, [
+            el('div', {}, [
+              el('div', { style: 'font-weight: 600;' }, `${e.weight_lbs} lb`),
+              e.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, e.notes) : null,
+            ]),
+            el('div', { class: 'muted', style: 'font-size: 13px;' }, e.date),
+          ]));
+        });
+        app.appendChild(list);
+      }
+    }
+
     async function renderStravaCard_(app) {
       const card = el('div', { class: 'card' }, [el('h2', {}, 'Strava')]);
 
@@ -4696,11 +4996,40 @@
       // Strava connection
       await renderStravaCard_(app);
 
-      // Weight placeholder
-      app.appendChild(el('div', { class: 'card' }, [
-        el('h2', {}, 'Body weight'),
-        el('div', { class: 'muted', style: 'font-size: 14px;' }, 'Next iteration: weigh-in log with weekly delta. Send me the green light when you want it wired up.'),
-      ]));
+      // Body weight — show current + weekly delta, or an empty-state
+      // prompt. Full logging happens on the dedicated body-weight screen.
+      try {
+        const bwEntries = await sbGetBodyWeightEntries(60);
+        const bwCard = el('div', { class: 'card' }, [el('h2', {}, 'Body weight')]);
+        if (bwEntries.length) {
+          const latest = bwEntries[0];
+          const oneWeekAgo = new Date(); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+          const weekAgoISO = oneWeekAgo.toISOString().slice(0, 10);
+          const weekAgo = bwEntries.find(e => e.date <= weekAgoISO) || bwEntries[bwEntries.length - 1];
+          const delta = latest.weight_lbs - weekAgo.weight_lbs;
+          const deltaStr = Math.abs(delta) < 0.05 ? 'flat vs last week'
+            : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} lb vs last week`;
+          bwCard.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 12px;' }, [
+            el('div', { class: 'big', style: 'font-size: 28px;' }, `${latest.weight_lbs} lb`),
+            el('div', { class: 'muted', style: 'font-size: 13px;' }, deltaStr),
+          ]));
+          bwCard.appendChild(el('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 12px;' },
+            `Last logged ${latest.date}`));
+        } else {
+          bwCard.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; margin-bottom: 14px;' },
+            'Track your weight over time. Simple weigh-in log with weekly + monthly deltas and a trend line.'));
+        }
+        bwCard.appendChild(el('button', {
+          style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          onclick: () => render('body-weight'),
+        }, bwEntries.length ? 'View + log' : 'Log first weigh-in'));
+        app.appendChild(bwCard);
+      } catch (e) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Body weight'),
+          el('div', { class: 'muted', style: 'font-size: 13px;' }, 'Could not load: ' + e.message),
+        ]));
+      }
 
       // Feedback — beta essential. Direct line to Jeff.
       app.appendChild(el('div', { class: 'card' }, [
