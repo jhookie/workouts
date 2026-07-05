@@ -546,6 +546,45 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Widget editor rows */
+    .widget-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .widget-row:last-child { border-bottom: none; }
+    .widget-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .widget-icon-btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border-radius: 6px;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .widget-icon-btn:disabled {
+      color: #444;
+      cursor: default;
+    }
+    .widget-icon-btn.add {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .widget-icon-btn.danger {
+      color: #d97a7a;
+    }
+
     /* Feedback rating stars */
     .feedback-rating {
       display: flex;
@@ -2278,6 +2317,7 @@
       else if (view && view.startsWith('activity-')) await renderActivity(app, view.slice('activity-'.length));
       else if (view === 'feedback') await renderFeedback(app);
       else if (view === 'body-weight') await renderBodyWeight(app);
+      else if (view === 'edit-widgets') await renderEditWidgets(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -2313,11 +2353,13 @@
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
 
-      // Load the user's chosen modalities so tiles + goals adapt to them.
+      // Load the user's profile — drives modalities AND widget selection.
       const profile = await sbLoadUserProfile().catch(() => null);
       const modalities = userModalities_(profile);
+      const widgetIds  = getUserWidgets_(profile);
 
-      // Action grid — one or more tiles per chosen modality.
+      // Action grid — one or more tiles per chosen modality. Always shown
+      // (not a widget) since it's the "how do I log something?" affordance.
       const tiles = [];
       modalities.forEach(id => {
         (MODALITY_TILES[id] || []).forEach(t => {
@@ -2325,85 +2367,281 @@
         });
       });
       if (!tiles.length) {
-        // Safety fallback if somehow no tiles resolved.
         tiles.push(actionTile_('run', 'Run', 'run', false));
       }
       app.appendChild(el('div', { class: 'action-grid' }, tiles));
 
-      // Stats from Supabase
+      // Stats from Supabase (shared context for widget renderers).
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
       app.appendChild(skel);
-      try {
-        const stats = await sbStats();
-        skel.remove();
+      let stats = null;
+      try { stats = await sbStats(); } catch (e) {}
+      skel.remove();
 
-        // ── Weekly goals card ──────────────────────────────
-        // One row per user modality. Row shows tap-to-set placeholder if no
-        // goal yet, or progress bar if one's set.
-        const goalsCard = el('div', { class: 'card' }, [el('h2', {}, 'Weekly goals')]);
-        const anyGoalSet = modalities.some(m => (stats.goals[m] || 0) > 0);
-        if (!anyGoalSet) {
-          goalsCard.appendChild(el('div', {
-            class: 'muted',
-            style: 'font-size: 13px; margin: 8px 0 12px;',
-          }, 'Tap any dashed number below to set a weekly target.'));
-        }
-        modalities.forEach(m => {
-          const count = stats.weekCounts[m] || 0;
-          const goal  = stats.goals[m] || 0;
-          goalsCard.appendChild(goalRow_(modalityLabel_(m), count, goal, m));
-        });
-        app.appendChild(goalsCard);
-
-        // ── This-week distance cards ────────────────────────
-        // Pair "Miles this week" (running) with per-modality distance stats
-        // (walking, cycling, hiking, swimming, rowing) so the row layout is
-        // balanced regardless of which modalities you picked.
-        const distanceCards = [];
-        if (modalities.includes('running')) {
-          distanceCards.push(el('div', { class: 'card' }, [
-            el('h2', {}, 'Miles this week'),
-            el('div', { class: 'big' }, String(stats.runs.week)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'running'),
-          ]));
-        }
-        const distanceLabels = {
-          walking:  { label: 'Walking',  unit: 'mi' },
-          cycling:  { label: 'Ride',     unit: 'mi' },
-          hiking:   { label: 'Hike',     unit: 'mi' },
-          swimming: { label: 'Swim',     unit: 'yd' },
-          rowing:   { label: 'Row',      unit: 'm'  },
-        };
-        ['walking','cycling','hiking','swimming','rowing'].forEach(mod => {
-          if (!modalities.includes(mod)) return;
-          const dist = stats.weekDistances[mod] || 0;
-          if (dist <= 0) return; // only show if there's data
-          const cfg = distanceLabels[mod];
-          distanceCards.push(el('div', { class: 'card' }, [
-            el('h2', {}, `${cfg.label} this week`),
-            el('div', { class: 'big' }, String(dist)),
-            el('div', { class: 'muted', style: 'margin-top: 4px;' }, cfg.unit),
-          ]));
-        });
-        // Pair them into a stat-grid two at a time.
-        for (let i = 0; i < distanceCards.length; i += 2) {
-          const pair = distanceCards.slice(i, i + 2);
-          if (pair.length === 2) {
-            app.appendChild(el('div', { class: 'stat-grid' }, pair));
-          } else {
-            app.appendChild(pair[0]);
-          }
-        }
-
-        // ── Cumulative YTD stat (with modality filter) ──────
-        // Shows a segmented control if the user picked more than one
-        // distance-having modality — lets them switch between Total /
-        // Run / Walk / Ride / etc. Total = sum of mile-based modalities
-        // only (swim yards + row meters stay separate since units differ).
-        renderYtdCard_(app, modalities, stats);
-      } catch (e) {
-        skel.remove();
+      // Render each configured widget in order. Widget renderers can be
+      // async — they may need to do their own fetches.
+      const ctx = { app, modalities, stats, profile };
+      for (const id of widgetIds) {
+        const widget = WIDGET_CATALOG[id];
+        if (!widget) continue;
+        try { await widget.render(ctx); }
+        catch (e) { /* widget errors don't break Home */ }
       }
+
+      // Customize link — subtle bottom-of-page link to edit-widgets.
+      app.appendChild(el('div', {
+        style: 'text-align: center; margin: 24px 0 12px;',
+      }, [
+        el('button', {
+          style: 'background: transparent; color: var(--muted); border: none; padding: 0; font-size: 13px; cursor: pointer; width: auto;',
+          onclick: () => render('edit-widgets'),
+        }, '⚙ Customize widgets'),
+      ]));
+    }
+
+    // ── Widget catalog ─────────────────────────────────────
+    // Each widget = { label, desc, render(ctx) }. Renderers append their
+    // card(s) to ctx.app. Widgets that fetch their own data are async.
+
+    const WIDGET_CATALOG = {
+      'weekly-goals': {
+        label: 'Weekly goals',
+        desc: 'Progress bars toward weekly targets for each of your modalities',
+        render: (ctx) => widgetWeeklyGoals_(ctx),
+      },
+      'distance-this-week': {
+        label: 'Distance this week',
+        desc: 'Miles / yards / meters logged this week per modality',
+        render: (ctx) => widgetDistanceThisWeek_(ctx),
+      },
+      'distance-ytd': {
+        label: 'Distance YTD',
+        desc: 'Year-to-date distance with a modality filter',
+        render: (ctx) => widgetDistanceYtd_(ctx),
+      },
+      'body-weight': {
+        label: 'Body weight',
+        desc: 'Current weight + weekly delta',
+        render: (ctx) => widgetBodyWeight_(ctx),
+      },
+      'training-streak': {
+        label: 'Training streak',
+        desc: 'Consecutive days with at least one logged session',
+        render: (ctx) => widgetTrainingStreak_(ctx),
+      },
+      'recent-sessions': {
+        label: 'Recent sessions',
+        desc: 'Your last 3 workouts across every modality',
+        render: (ctx) => widgetRecentSessions_(ctx),
+      },
+      'active-program': {
+        label: 'Active program',
+        desc: 'The lift program you have currently active',
+        render: (ctx) => widgetActiveProgram_(ctx),
+      },
+    };
+
+    // Widgets to show when a user hasn't customized. Matches current Home
+    // so existing users see no change until they explicitly customize.
+    const DEFAULT_WIDGETS = ['weekly-goals', 'distance-this-week', 'distance-ytd'];
+
+    function getUserWidgets_(profile) {
+      const arr = profile && profile.dashboard_widgets;
+      if (Array.isArray(arr) && arr.length) return arr.slice();
+      return DEFAULT_WIDGETS.slice();
+    }
+
+    async function sbUpdateWidgets(widgetIds) {
+      const { error } = await _sb.from('user_profiles')
+        .upsert({ id: currentUser.id, dashboard_widgets: widgetIds }, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+      _userProfileCache = null;
+    }
+
+    // ── Individual widget renderers ───────────────────────
+
+    function widgetWeeklyGoals_({ app, modalities, stats }) {
+      if (!stats) return;
+      const card = el('div', { class: 'card' }, [el('h2', {}, 'Weekly goals')]);
+      const anyGoalSet = modalities.some(m => (stats.goals[m] || 0) > 0);
+      if (!anyGoalSet) {
+        card.appendChild(el('div', {
+          class: 'muted',
+          style: 'font-size: 13px; margin: 8px 0 12px;',
+        }, 'Tap any dashed number below to set a weekly target.'));
+      }
+      modalities.forEach(m => {
+        const count = stats.weekCounts[m] || 0;
+        const goal  = stats.goals[m] || 0;
+        card.appendChild(goalRow_(modalityLabel_(m), count, goal, m));
+      });
+      app.appendChild(card);
+    }
+
+    function widgetDistanceThisWeek_({ app, modalities, stats }) {
+      if (!stats) return;
+      const distanceCards = [];
+      if (modalities.includes('running')) {
+        distanceCards.push(el('div', { class: 'card' }, [
+          el('h2', {}, 'Miles this week'),
+          el('div', { class: 'big' }, String(stats.runs.week)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'running'),
+        ]));
+      }
+      const distanceLabels = {
+        walking:  { label: 'Walking',  unit: 'mi' },
+        cycling:  { label: 'Ride',     unit: 'mi' },
+        hiking:   { label: 'Hike',     unit: 'mi' },
+        swimming: { label: 'Swim',     unit: 'yd' },
+        rowing:   { label: 'Row',      unit: 'm'  },
+      };
+      ['walking','cycling','hiking','swimming','rowing'].forEach(mod => {
+        if (!modalities.includes(mod)) return;
+        const dist = stats.weekDistances[mod] || 0;
+        if (dist <= 0) return;
+        const cfg = distanceLabels[mod];
+        distanceCards.push(el('div', { class: 'card' }, [
+          el('h2', {}, `${cfg.label} this week`),
+          el('div', { class: 'big' }, String(dist)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, cfg.unit),
+        ]));
+      });
+      for (let i = 0; i < distanceCards.length; i += 2) {
+        const pair = distanceCards.slice(i, i + 2);
+        if (pair.length === 2) app.appendChild(el('div', { class: 'stat-grid' }, pair));
+        else app.appendChild(pair[0]);
+      }
+    }
+
+    function widgetDistanceYtd_({ app, modalities, stats }) {
+      if (!stats) return;
+      renderYtdCard_(app, modalities, stats);
+    }
+
+    async function widgetBodyWeight_({ app }) {
+      try {
+        const entries = await sbGetBodyWeightEntries(30);
+        if (!entries.length) return; // silent when no data — don't waste screen space
+        const latest = entries[0];
+        const oneWeekAgo = new Date(); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        const weekAgoISO = oneWeekAgo.toISOString().slice(0, 10);
+        const weekAgo = entries.find(e => e.date <= weekAgoISO) || entries[entries.length - 1];
+        const delta = latest.weight_lbs - weekAgo.weight_lbs;
+        const deltaStr = Math.abs(delta) < 0.05 ? 'flat vs last week'
+          : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} lb vs last week`;
+        app.appendChild(el('div', {
+          class: 'card',
+          onclick: () => render('body-weight'),
+          style: 'cursor: pointer;',
+        }, [
+          el('h2', {}, 'Body weight'),
+          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px;' }, [
+            el('div', { class: 'big' }, `${latest.weight_lbs} lb`),
+            el('div', { class: 'muted', style: 'font-size: 13px;' }, deltaStr),
+          ]),
+        ]));
+      } catch (e) { /* silent */ }
+    }
+
+    async function widgetTrainingStreak_({ app }) {
+      try {
+        // Fetch a few months of session dates across all modalities.
+        const uid = currentUser.id;
+        const now = new Date();
+        const sixtyDaysAgo = new Date(now); sixtyDaysAgo.setDate(now.getDate() - 60);
+        const sinceISO = sixtyDaysAgo.toISOString().slice(0, 10);
+        const [liftsR, runsR, walksR, pullsR, actsR] = await Promise.all([
+          _sb.from('lift_sessions').select('date').eq('user_id', uid).gte('date', sinceISO),
+          _sb.from('runs').select('date').eq('user_id', uid).gte('date', sinceISO),
+          _sb.from('walks').select('date').eq('user_id', uid).gte('date', sinceISO),
+          _sb.from('pullup_sessions').select('date').eq('user_id', uid).gte('date', sinceISO),
+          _sb.from('activities').select('date').eq('user_id', uid).gte('date', sinceISO),
+        ]);
+        const days = new Set();
+        [liftsR, runsR, walksR, pullsR, actsR].forEach(r => {
+          (r.data || []).forEach(row => row.date && days.add(row.date));
+        });
+        // Compute streak — walking back from today. Break if a day has no
+        // activity; today itself is allowed to be empty (streak is measured
+        // through yesterday if today's not done yet).
+        const todayISOStr = todayISO();
+        let streak = 0;
+        const cursor = new Date(todayISOStr + 'T12:00:00');
+        // Skip today if no activity — we count "days trained through today or ended yesterday"
+        const cursorISO = () => cursor.toISOString().slice(0, 10);
+        if (!days.has(cursorISO())) cursor.setDate(cursor.getDate() - 1);
+        while (days.has(cursorISO())) {
+          streak += 1;
+          cursor.setDate(cursor.getDate() - 1);
+        }
+        if (streak === 0) return; // don't show a zero streak
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Training streak'),
+          el('div', { class: 'big' }, `${streak} day${streak === 1 ? '' : 's'}`),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' },
+            'consecutive days with at least one session'),
+        ]));
+      } catch (e) { /* silent */ }
+    }
+
+    async function widgetRecentSessions_({ app }) {
+      try {
+        const uid = currentUser.id;
+        const [liftsR, runsR, walksR, pullsR, actsR] = await Promise.all([
+          _sb.from('lift_sessions').select('date,block_name,day,exercises').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('walks').select('date,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('pullup_sessions').select('date,total_reps').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('activities').select('date,activity_type,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+        ]);
+        const rows = [];
+        (liftsR.data || []).forEach(s => rows.push(normalizeLiftRow_(s)));
+        (runsR.data  || []).forEach(r => rows.push(normalizeRunRow_(r)));
+        (walksR.data || []).forEach(w => rows.push(normalizeWalkRow_(w)));
+        (pullsR.data || []).forEach(p => rows.push(normalizePullupRow_(p)));
+        (actsR.data  || []).forEach(a => rows.push(normalizeActivityRow_(a)));
+        rows.sort((a, b) => b.date.localeCompare(a.date));
+        const top3 = rows.slice(0, 3);
+        if (!top3.length) return;
+        const card = el('div', { class: 'card' }, [el('h2', {}, 'Recent sessions')]);
+        top3.forEach(row => {
+          const wd = new Date(row.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          card.appendChild(el('div', {
+            style: 'padding: 10px 0; border-bottom: 1px solid var(--border);' + (row.onClick ? ' cursor: pointer;' : ''),
+            onclick: row.onClick || null,
+          }, [
+            el('div', { style: 'display: flex; align-items: baseline; gap: 8px;' }, [
+              el('span', { class: `history-tag tag-${row.tagColor}` }, row.tag),
+              el('span', { style: 'font-size: 13px; color: var(--muted);' }, wd),
+            ]),
+            el('div', { style: 'margin-top: 4px; font-size: 14px;' }, row.primary || '—'),
+            row.subtitle ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, row.subtitle) : null,
+          ]));
+        });
+        // Remove border on last child for cleanliness
+        const last = card.lastChild;
+        if (last && last.style) last.style.borderBottom = 'none';
+        app.appendChild(card);
+      } catch (e) { /* silent */ }
+    }
+
+    async function widgetActiveProgram_({ app }) {
+      try {
+        const ap = await sbActiveProgram();
+        if (!ap) return;
+        const s = ap.structure || {};
+        const weeksTotal = s.weeks_total || (s.weeks ? s.weeks.length : 0);
+        app.appendChild(el('div', {
+          class: 'card',
+          onclick: () => render('programs'),
+          style: 'cursor: pointer;',
+        }, [
+          el('h2', {}, 'Active program'),
+          el('div', { class: 'big', style: 'font-size: 18px; margin-top: 6px;' }, ap.name),
+          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' },
+            `${weeksTotal} weeks · Days ${(s.day_letters || []).join('/')}`),
+        ]));
+      } catch (e) { /* silent */ }
     }
 
     // Fallback weekly targets — used only if user_profiles row doesn't have
@@ -4645,6 +4883,138 @@
             }
           },
         }, 'Finish →'),
+      ]));
+    }
+
+    // -------- Edit widgets screen --------
+    async function renderEditWidgets(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Customize widgets')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('home'),
+      }, '← Back to Home'));
+
+      const profile = await sbLoadUserProfile().catch(() => null);
+      let currentWidgets = getUserWidgets_(profile);
+
+      const activeCard = el('div', { class: 'card' }, [
+        el('h2', {}, 'On your Home'),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin: 4px 0 12px;' },
+          'Reorder with ↑↓ or remove with ×. Changes save automatically.'),
+      ]);
+      const activeList = el('div', { id: 'widgetActiveList' });
+      activeCard.appendChild(activeList);
+      app.appendChild(activeCard);
+
+      const availableCard = el('div', { class: 'card' }, [
+        el('h2', {}, 'Available widgets'),
+      ]);
+      const availableList = el('div', { id: 'widgetAvailableList' });
+      availableCard.appendChild(availableList);
+      app.appendChild(availableCard);
+
+      const renderLists = () => {
+        activeList.innerHTML = '';
+        currentWidgets.forEach((id, idx) => {
+          const widget = WIDGET_CATALOG[id];
+          if (!widget) return;
+          activeList.appendChild(el('div', {
+            class: 'widget-row',
+          }, [
+            el('div', { style: 'flex: 1;' }, [
+              el('div', { style: 'font-weight: 600;' }, widget.label),
+              el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, widget.desc),
+            ]),
+            el('div', { class: 'widget-actions' }, [
+              el('button', {
+                class: 'widget-icon-btn',
+                title: 'Move up',
+                disabled: idx === 0 ? 'disabled' : null,
+                onclick: async () => {
+                  if (idx === 0) return;
+                  [currentWidgets[idx-1], currentWidgets[idx]] = [currentWidgets[idx], currentWidgets[idx-1]];
+                  await save();
+                },
+              }, '↑'),
+              el('button', {
+                class: 'widget-icon-btn',
+                title: 'Move down',
+                disabled: idx === currentWidgets.length - 1 ? 'disabled' : null,
+                onclick: async () => {
+                  if (idx === currentWidgets.length - 1) return;
+                  [currentWidgets[idx+1], currentWidgets[idx]] = [currentWidgets[idx], currentWidgets[idx+1]];
+                  await save();
+                },
+              }, '↓'),
+              el('button', {
+                class: 'widget-icon-btn danger',
+                title: 'Remove',
+                onclick: async () => {
+                  currentWidgets = currentWidgets.filter(w => w !== id);
+                  await save();
+                },
+              }, '×'),
+            ]),
+          ]));
+        });
+        if (!currentWidgets.length) {
+          activeList.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; padding: 12px 0;' },
+            'No widgets on your Home. Add some from below.'));
+        }
+
+        availableList.innerHTML = '';
+        const available = Object.keys(WIDGET_CATALOG).filter(id => !currentWidgets.includes(id));
+        if (!available.length) {
+          availableList.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; padding: 12px 0;' },
+            'All widgets are already on your Home. More coming.'));
+        }
+        available.forEach(id => {
+          const widget = WIDGET_CATALOG[id];
+          availableList.appendChild(el('div', {
+            class: 'widget-row',
+          }, [
+            el('div', { style: 'flex: 1;' }, [
+              el('div', { style: 'font-weight: 600;' }, widget.label),
+              el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, widget.desc),
+            ]),
+            el('div', { class: 'widget-actions' }, [
+              el('button', {
+                class: 'widget-icon-btn add',
+                title: 'Add',
+                onclick: async () => {
+                  currentWidgets.push(id);
+                  await save();
+                },
+              }, '+'),
+            ]),
+          ]));
+        });
+      };
+
+      const save = async () => {
+        try {
+          await sbUpdateWidgets(currentWidgets);
+          renderLists();
+        } catch (e) {
+          toast('Could not save: ' + e.message, true);
+        }
+      };
+
+      renderLists();
+
+      // Reset-to-defaults button at the bottom.
+      app.appendChild(el('div', {
+        style: 'text-align: center; margin-top: 16px;',
+      }, [
+        el('button', {
+          style: 'background: transparent; color: var(--muted); border: none; padding: 8px; font-size: 13px; cursor: pointer; width: auto;',
+          onclick: async () => {
+            if (!confirm('Reset your widgets to the defaults?')) return;
+            currentWidgets = DEFAULT_WIDGETS.slice();
+            await save();
+          },
+        }, 'Reset to defaults'),
       ]));
     }
 
