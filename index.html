@@ -5088,6 +5088,30 @@
       return d.toISOString().slice(0, 10);
     }
 
+    // Group consecutive identical sets so accessories collapse from
+    // "8 reps ... 8 reps ... 8 reps ... 8 reps" into "4 sets · 8 reps".
+    // Progressive 5/3/1 sets (each different) stay one row per set.
+    function groupIdenticalSets_(sets) {
+      const groups = [];
+      (sets || []).forEach(set => {
+        const key = JSON.stringify([
+          set.set_type || '',
+          set.target_reps || '',
+          set.percent ?? '',
+          set.target_weight ?? '',
+          set.rest || '',
+          set.notes || '',
+        ]);
+        const last = groups[groups.length - 1];
+        if (last && last.key === key) {
+          last.count += 1;
+        } else {
+          groups.push({ key, count: 1, set });
+        }
+      });
+      return groups;
+    }
+
     function renderPlanLiftCard_(sess) {
       const card = el('div', { class: 'card' }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;' }, [
@@ -5096,27 +5120,37 @@
         ]),
       ]);
       (sess.exercises || []).forEach(ex => {
+        const groups = groupIdenticalSets_(ex.sets);
+        const totalSets = (ex.sets || []).length;
+
         const setsWrap = el('div', { class: 'plan-sets' });
-        (ex.sets || []).forEach(set => {
+        groups.forEach(group => {
+          const s = group.set;
           const parts = [];
-          if (set.set_type) parts.push(set.set_type);
-          if (set.target_reps) parts.push(`${set.target_reps} reps`);
-          if (set.percent) parts.push(`${set.percent}%`);
-          if (set.target_weight) parts.push(`${set.target_weight} lb`);
-          if (set.rest) parts.push(`rest ${set.rest}`);
+          // Lead with the set count so "how many" is the first thing you read.
+          if (group.count > 1) parts.push(`${group.count} sets`);
+          else if (totalSets > 1) parts.push(`Set ${s.set_num || ''}`.trim());
+          if (s.set_type) parts.push(s.set_type);
+          if (s.target_reps) parts.push(`${s.target_reps} reps`);
+          if (s.percent) parts.push(`${s.percent}%`);
+          if (s.target_weight) parts.push(`${s.target_weight} lb`);
+          if (s.rest) parts.push(`rest ${s.rest}`);
           setsWrap.appendChild(el('div', { style: 'padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px;' }, [
-            el('div', {}, parts.join(' · ')),
-            set.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic; margin-top: 2px;' }, set.notes) : null,
+            el('div', {}, parts.filter(Boolean).join(' · ')),
+            s.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic; margin-top: 2px;' }, s.notes) : null,
           ]));
         });
         // Remove border on last set inside this exercise
         const lastChild = setsWrap.lastChild;
         if (lastChild && lastChild.style) lastChild.style.borderBottom = 'none';
 
+        // Set-count badge on the exercise header for at-a-glance scanning.
+        const badgeText = totalSets > 1 ? `${totalSets} sets` : '1 set';
         card.appendChild(el('div', { class: 'plan-exercise' }, [
           el('div', { class: 'plan-exercise-head' }, [
             el('div', { style: 'font-weight: 600;' }, ex.name),
-            ex.muscle ? el('span', { class: 'muted', style: 'font-size: 11px;' }, ex.muscle) : null,
+            el('span', { class: 'muted', style: 'font-size: 11px;' },
+              ex.muscle ? `${ex.muscle} · ${badgeText}` : badgeText),
           ]),
           setsWrap,
         ]));
