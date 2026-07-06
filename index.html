@@ -1763,26 +1763,40 @@
       const startDate = `${year}-${pad(month)}-01`;
       const lastDay = new Date(year, month, 0).getDate();
       const endDate = `${year}-${pad(month)}-${pad(lastDay)}`;
-      const [runsR, liftsR, pullsR] = await Promise.all([
-        _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
-        _sb.from('lift_sessions').select('date,block_name,week,day').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
-        _sb.from('pullup_sessions').select('date,total_reps').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+      const [runsR, liftsR, pullsR, walksR, actsR] = await Promise.all([
+        _sb.from('runs').select('id,date,distance,duration_secs,pace,notes').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('lift_sessions').select('id,date,block_name,week,day').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('pullup_sessions').select('id,date,total_reps,sets').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('walks').select('id,date,distance,duration_secs,notes').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
+        _sb.from('activities').select('id,date,activity_type,distance,duration_secs,intensity,notes').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
       ]);
       const runByDate = {}; (runsR.data || []).forEach(r => { runByDate[r.date] = r; });
       const liftByDate = {}; (liftsR.data || []).forEach(l => { liftByDate[l.date] = l; });
       const pullByDate = {}; (pullsR.data || []).forEach(p => { pullByDate[p.date] = p; });
+      const walkByDate = {}; (walksR.data || []).forEach(w => { walkByDate[w.date] = w; });
+      const actsByDate = {}; (actsR.data || []).forEach(a => {
+        (actsByDate[a.date] = actsByDate[a.date] || []).push(a);
+      });
       const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
       const wdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
       const days = [];
       for (let d = 1; d <= lastDay; d++) {
         const ds = `${year}-${pad(month)}-${pad(d)}`;
-        const run = runByDate[ds], lift = liftByDate[ds], pull = pullByDate[ds];
+        const run = runByDate[ds], lift = liftByDate[ds], pull = pullByDate[ds], walk = walkByDate[ds];
+        const acts = actsByDate[ds] || [];
         const dow = new Date(year, month - 1, d).getDay();
         days.push({
           date: ds, day: d, weekday: wdays[dow],
-          run:    run  ? { distance: Math.round(Number(run.distance)*100)/100, time: run.duration_secs ? `${Math.floor(run.duration_secs/60)}:${String(run.duration_secs%60).padStart(2,'0')}:00` : '', pace: run.pace || '' } : null,
-          lift:   lift ? { block: lift.block_name, week: lift.week, day: lift.day } : null,
-          pullups:pull ? { total: pull.total_reps, weight: 'BW' } : null,
+          run:    run  ? { id: run.id, distance: Math.round(Number(run.distance)*100)/100, time: run.duration_secs ? `${Math.floor(run.duration_secs/60)}:${String(run.duration_secs%60).padStart(2,'0')}:00` : '', pace: run.pace || '' } : null,
+          lift:   lift ? { id: lift.id, block: lift.block_name, week: lift.week, day: lift.day } : null,
+          pullups:pull ? { id: pull.id, total: pull.total_reps, weight: 'BW' } : null,
+          walk:   walk ? { id: walk.id, distance: Math.round(Number(walk.distance)*100)/100, time: walk.duration_secs ? `${Math.floor(walk.duration_secs/60)}:${String(walk.duration_secs%60).padStart(2,'0')}` : '' } : null,
+          activities: acts.map(a => ({
+            id: a.id, type: a.activity_type,
+            distance: a.distance != null ? Math.round(Number(a.distance)*100)/100 : null,
+            time: a.duration_secs ? `${Math.floor(a.duration_secs/60)}:${String(a.duration_secs%60).padStart(2,'0')}` : '',
+            intensity: a.intensity, notes: a.notes,
+          })),
         });
       }
       const mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -2380,6 +2394,10 @@
       else if (view === 'training-plan') await renderTrainingPlan(app);
       else if (view === 'plan-log-lift') await renderPlanLogLift(app);
       else if (view === 'lift-edit') await renderLiftEdit(app);
+      else if (view === 'run-edit') await renderRunEdit(app);
+      else if (view === 'walk-edit') await renderWalkEdit(app);
+      else if (view === 'activity-edit') await renderActivityEdit(app);
+      else if (view === 'pullups-edit') await renderPullupsEdit(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -4093,18 +4111,46 @@
           }, 'View session →'),
         ]));
       }
+      const editBtn = (onclick) => el('button', {
+        style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
+        onclick,
+      }, 'Edit');
+
       if (day.run) {
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #7ab7ff;' }, 'Run'),
           el('div', { class: 'muted', style: 'font-size: 13px;' },
             `${day.run.distance} mi · ${prettyTime_(day.run.time)} · ${day.run.pace}${day.run.shoe ? ' · ' + day.run.shoe : ''}`),
+          day.run.id ? editBtn(() => { _runEditRef = { id: day.run.id }; render('run-edit'); }) : null,
         ]));
       }
+      if (day.walk) {
+        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
+          el('div', { style: 'font-weight: 600; color: #7ade95;' }, 'Walk'),
+          el('div', { class: 'muted', style: 'font-size: 13px;' },
+            `${day.walk.distance} mi${day.walk.time ? ' · ' + day.walk.time : ''}`),
+          day.walk.id ? editBtn(() => { _walkEditRef = { id: day.walk.id }; render('walk-edit'); }) : null,
+        ]));
+      }
+      (day.activities || []).forEach(act => {
+        const kindLabel = { cycling: 'Ride', hiking: 'Hike', swimming: 'Swim', rowing: 'Row', yoga: 'Yoga', other: 'Other' }[act.type] || 'Activity';
+        const unit = act.type === 'swimming' ? 'yd' : (act.type === 'rowing' ? 'm' : 'mi');
+        const parts = [];
+        if (act.distance != null) parts.push(`${act.distance} ${unit}`);
+        if (act.time) parts.push(act.time);
+        if (act.intensity) parts.push(act.intensity);
+        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
+          el('div', { style: 'font-weight: 600; color: #b47aff;' }, kindLabel),
+          el('div', { class: 'muted', style: 'font-size: 13px;' }, parts.join(' · ') || '—'),
+          act.id ? editBtn(() => { _activityEditRef = { id: act.id }; render('activity-edit'); }) : null,
+        ]));
+      });
       if (day.pullups) {
         items.push(el('div', { style: 'padding: 8px 0;' }, [
           el('div', { style: 'font-weight: 600; color: #7affb7;' }, 'Pull-Ups'),
           el('div', { class: 'muted', style: 'font-size: 13px;' },
             `${day.pullups.total} reps · ${day.pullups.weight || 'BW'}`),
+          day.pullups.id ? editBtn(() => { _pullupsEditRef = { id: day.pullups.id }; render('pullups-edit'); }) : null,
         ]));
       }
       if (!items.length) {
@@ -5768,6 +5814,312 @@
       ]));
     }
 
+    // -------- Edit / delete for non-lift sessions --------
+    // Each entry point sets a small ref before render(). The render function
+    // fetches the row by id (or by date as a fallback), pre-fills a form,
+    // and issues UPDATE / DELETE against the appropriate table.
+
+    let _runEditRef = null;      // { id }
+    let _walkEditRef = null;     // { id }
+    let _activityEditRef = null; // { id }
+    let _pullupsEditRef = null;  // { id }
+
+    async function sbGetRowById(table, id, cols) {
+      const { data, error } = await _sb.from(table).select(cols).eq('id', id).single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    async function sbUpdateRow(table, id, patch) {
+      const { error } = await _sb.from(table).update(patch).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+    async function sbDeleteRow(table, id) {
+      const { error } = await _sb.from(table).delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    function editHeader_(app, title, backHandler) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, title)]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: backHandler,
+      }, '← Cancel'));
+    }
+    function deleteButton_(app, onConfirm) {
+      app.appendChild(el('div', { style: 'text-align: center; margin-top: 12px;' }, [
+        el('button', {
+          style: 'background: transparent; color: #d97a7a; border: 1px solid var(--border); padding: 8px 16px; font-size: 13px; width: auto;',
+          onclick: async () => {
+            if (!confirm('Delete this entry permanently? This cannot be undone.')) return;
+            try {
+              await onConfirm();
+            } catch (e) {
+              toast('Could not delete: ' + (e.message || e), true);
+            }
+          },
+        }, 'Delete this entry'),
+      ]));
+    }
+
+    // ── Run edit ─────────────────────────────────────────
+    async function renderRunEdit(app) {
+      const ref = _runEditRef;
+      editHeader_(app, 'Edit run', () => { _runEditRef = null; render('calendar'); });
+      if (!ref || !ref.id) {
+        app.appendChild(el('div', { class: 'card' }, 'No run selected.'));
+        return;
+      }
+      let row;
+      try { row = await sbGetRowById('runs', ref.id, 'id,date,distance,duration_secs,pace,notes,shoe_id'); }
+      catch (e) {
+        app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
+        return;
+      }
+
+      let shoes = [];
+      try { shoes = await sbShoes(); } catch (e) {}
+      const currentShoeName = shoes.find(s => s.id === row.shoe_id)?.name || '';
+      const shoeOptions = [el('option', { value: '' }, '— Select shoe —')]
+        .concat(shoes.map(s => el('option', { value: s.name, selected: s.name === currentShoeName }, `${s.name} (${s.totalMiles} mi)`)));
+
+      const durSecs = Number(row.duration_secs) || 0;
+      const initMin = String(Math.floor(durSecs / 60));
+      const initSec = String(durSecs % 60).padStart(2, '0');
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'reDate', type: 'date', value: row.date })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'reDist', type: 'number', step: '0.01', inputmode: 'decimal', value: String(row.distance || '') })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Time'),
+          el('div', { class: 'time-row' }, [
+            el('input', { id: 'reMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+            el('div', { class: 'sep' }, ':'),
+            el('input', { id: 'reSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+          ]),
+          el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
+        ]),
+        el('div', { class: 'field' }, [el('label', {}, 'Shoe'), el('select', { id: 'reShoe' }, shoeOptions)]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes'), el('input', { id: 'reNotes', type: 'text', value: row.notes || '' })]),
+        el('button', {
+          onclick: async () => {
+            const newDate = $('#reDate').value;
+            const distance = Number($('#reDist').value);
+            const minRaw = $('#reMin').value.trim();
+            const secRaw = $('#reSec').value.trim();
+            const notes = $('#reNotes').value.trim();
+            const shoeName = $('#reShoe').value;
+            if (!newDate || !distance) return toast('Date and distance required', true);
+            const dur = (Number(minRaw) || 0) * 60 + (Number(secRaw) || 0);
+            const pace = (dur > 0 && distance > 0) ? secsToMMSS(dur / distance) : null;
+            const shoeId = shoes.find(s => s.name === shoeName)?.id || null;
+            try {
+              await sbUpdateRow('runs', row.id, {
+                date: newDate, distance, duration_secs: dur || null,
+                pace, notes: notes || null, shoe_id: shoeId,
+              });
+              toast('Run updated');
+              _runEditRef = null;
+              setTimeout(() => render('calendar'), 500);
+            } catch (e) { toast('Could not save: ' + e.message, true); }
+          },
+        }, 'Save changes'),
+      ]));
+      deleteButton_(app, async () => {
+        await sbDeleteRow('runs', row.id);
+        toast('Run deleted');
+        _runEditRef = null;
+        setTimeout(() => render('calendar'), 500);
+      });
+    }
+
+    // ── Walk edit ────────────────────────────────────────
+    async function renderWalkEdit(app) {
+      const ref = _walkEditRef;
+      editHeader_(app, 'Edit walk', () => { _walkEditRef = null; render('calendar'); });
+      if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No walk selected.')); return; }
+      let row;
+      try { row = await sbGetRowById('walks', ref.id, 'id,date,distance,duration_secs,notes'); }
+      catch (e) { app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message)); return; }
+
+      const durSecs = Number(row.duration_secs) || 0;
+      const initMin = String(Math.floor(durSecs / 60));
+      const initSec = String(durSecs % 60).padStart(2, '0');
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'weDate', type: 'date', value: row.date })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'weDist', type: 'number', step: '0.01', inputmode: 'decimal', value: String(row.distance || '') })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Time'),
+          el('div', { class: 'time-row' }, [
+            el('input', { id: 'weMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+            el('div', { class: 'sep' }, ':'),
+            el('input', { id: 'weSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+          ]),
+          el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
+        ]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes'), el('input', { id: 'weNotes', type: 'text', value: row.notes || '' })]),
+        el('button', {
+          onclick: async () => {
+            const newDate = $('#weDate').value;
+            const distance = Number($('#weDist').value);
+            const dur = (Number($('#weMin').value) || 0) * 60 + (Number($('#weSec').value) || 0);
+            const notes = $('#weNotes').value.trim();
+            if (!newDate || !distance) return toast('Date and distance required', true);
+            try {
+              await sbUpdateRow('walks', row.id, {
+                date: newDate, distance, duration_secs: dur || null, notes: notes || null,
+              });
+              toast('Walk updated');
+              _walkEditRef = null;
+              setTimeout(() => render('calendar'), 500);
+            } catch (e) { toast('Could not save: ' + e.message, true); }
+          },
+        }, 'Save changes'),
+      ]));
+      deleteButton_(app, async () => {
+        await sbDeleteRow('walks', row.id);
+        toast('Walk deleted');
+        _walkEditRef = null;
+        setTimeout(() => render('calendar'), 500);
+      });
+    }
+
+    // ── Activity edit ────────────────────────────────────
+    async function renderActivityEdit(app) {
+      const ref = _activityEditRef;
+      editHeader_(app, 'Edit activity', () => { _activityEditRef = null; render('calendar'); });
+      if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No activity selected.')); return; }
+      let row;
+      try { row = await sbGetRowById('activities', ref.id, 'id,date,activity_type,duration_secs,distance,intensity,notes'); }
+      catch (e) { app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message)); return; }
+
+      const showDistance = ['cycling', 'hiking', 'swimming', 'rowing'].includes(row.activity_type);
+      const distUnit = row.activity_type === 'swimming' ? 'yd' : 'mi';
+      const durSecs = Number(row.duration_secs) || 0;
+      const initMin = String(Math.floor(durSecs / 60));
+      const initSec = String(durSecs % 60).padStart(2, '0');
+
+      const card = el('div', { class: 'card' });
+      card.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'aeDate', type: 'date', value: row.date })]));
+      if (showDistance) {
+        card.appendChild(el('div', { class: 'field' }, [el('label', {}, `Distance (${distUnit})`), el('input', { id: 'aeDist', type: 'number', step: '0.01', inputmode: 'decimal', value: String(row.distance || '') })]));
+      }
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Time'),
+        el('div', { class: 'time-row' }, [
+          el('input', { id: 'aeMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+          el('div', { class: 'sep' }, ':'),
+          el('input', { id: 'aeSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+        ]),
+        el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
+      ]));
+      // Intensity buttons
+      card.appendChild(el('div', { class: 'field' }, [
+        el('label', {}, 'Intensity'),
+        el('div', { class: 'pill-row', id: 'aeIntensityRow' },
+          ['easy', 'moderate', 'hard', 'race'].map(lv => el('button', {
+            class: 'pill-btn' + (lv === row.intensity ? ' active' : ''),
+            'data-intensity': lv,
+            onclick: (e) => {
+              const btns = e.target.parentElement.querySelectorAll('button');
+              btns.forEach(b => b.classList.remove('active'));
+              e.target.classList.add('active');
+            },
+          }, lv.charAt(0).toUpperCase() + lv.slice(1))),
+        ),
+      ]));
+      card.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Notes'), el('input', { id: 'aeNotes', type: 'text', value: row.notes || '' })]));
+      card.appendChild(el('button', {
+        onclick: async () => {
+          const newDate = $('#aeDate').value;
+          const distance = showDistance ? (Number($('#aeDist').value) || null) : null;
+          const dur = (Number($('#aeMin').value) || 0) * 60 + (Number($('#aeSec').value) || 0);
+          const intensityBtn = document.querySelector('#aeIntensityRow .pill-btn.active');
+          const intensity = intensityBtn ? intensityBtn.getAttribute('data-intensity') : null;
+          const notes = $('#aeNotes').value.trim();
+          if (!newDate) return toast('Date required', true);
+          try {
+            await sbUpdateRow('activities', row.id, {
+              date: newDate, duration_secs: dur || null, distance,
+              intensity, notes: notes || null,
+            });
+            toast('Activity updated');
+            _activityEditRef = null;
+            setTimeout(() => render('calendar'), 500);
+          } catch (e) { toast('Could not save: ' + e.message, true); }
+        },
+      }, 'Save changes'));
+      app.appendChild(card);
+      deleteButton_(app, async () => {
+        await sbDeleteRow('activities', row.id);
+        toast('Activity deleted');
+        _activityEditRef = null;
+        setTimeout(() => render('calendar'), 500);
+      });
+    }
+
+    // ── Pull-ups edit ────────────────────────────────────
+    async function renderPullupsEdit(app) {
+      const ref = _pullupsEditRef;
+      editHeader_(app, 'Edit pull-ups', () => { _pullupsEditRef = null; render('calendar'); });
+      if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No session selected.')); return; }
+      let row;
+      try { row = await sbGetRowById('pullup_sessions', ref.id, 'id,date,sets,total_reps,notes'); }
+      catch (e) { app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message)); return; }
+
+      const sets = Array.isArray(row.sets) ? row.sets : [];
+      const setVal = (idx) => (sets[idx] != null && sets[idx] !== '') ? String(sets[idx]) : '';
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'peDate', type: 'date', value: row.date })]),
+        el('div', { class: 'field' }, [
+          el('label', {}, 'Reps per set'),
+          (() => {
+            const grid = el('div', { class: 'set-grid-5' });
+            ['S1', 'S2', 'S3', 'S4', 'S5'].forEach((lab, i) => {
+              grid.appendChild(el('div', {}, [
+                el('div', { style: 'font-size: 10px; text-align: center; color: var(--muted); margin-bottom: 4px;' }, lab),
+                el('input', { class: 'pe-s' + (i + 1), type: 'number', inputmode: 'numeric', value: setVal(i) }),
+              ]));
+            });
+            return grid;
+          })(),
+        ]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes'), el('input', { id: 'peNotes', type: 'text', value: row.notes || '' })]),
+        el('button', {
+          onclick: async () => {
+            const newDate = $('#peDate').value;
+            if (!newDate) return toast('Date required', true);
+            const newSets = [1, 2, 3, 4, 5].map(n => {
+              const v = document.querySelector('.pe-s' + n).value.trim();
+              return v === '' ? '' : Number(v);
+            });
+            const filtered = newSets.filter(v => v !== '');
+            if (!filtered.length) return toast('Enter at least one set', true);
+            const total = filtered.reduce((s, v) => s + (Number(v) || 0), 0);
+            const notes = $('#peNotes').value.trim();
+            try {
+              await sbUpdateRow('pullup_sessions', row.id, {
+                date: newDate, sets: newSets, total_reps: total, notes: notes || null,
+              });
+              toast('Pull-ups updated');
+              _pullupsEditRef = null;
+              setTimeout(() => render('calendar'), 500);
+            } catch (e) { toast('Could not save: ' + e.message, true); }
+          },
+        }, 'Save changes'),
+      ]));
+      deleteButton_(app, async () => {
+        await sbDeleteRow('pullup_sessions', row.id);
+        toast('Pull-ups deleted');
+        _pullupsEditRef = null;
+        setTimeout(() => render('calendar'), 500);
+      });
+    }
+
     // -------- Edit widgets screen --------
     async function renderEditWidgets(app) {
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Customize widgets')]));
@@ -5927,7 +6279,7 @@
     async function sbGetBodyWeightEntries(limit = 90) {
       const uid = currentUser.id;
       const { data, error } = await _sb.from('body_weight_log')
-        .select('date,weight_lbs,notes')
+        .select('id,date,weight_lbs,notes')
         .eq('user_id', uid)
         .order('date', { ascending: false })
         .limit(limit);
@@ -6043,18 +6395,46 @@
       ]);
       app.appendChild(logCard);
 
-      // Recent list
+      // Recent list — each row has Edit + Delete
       if (entries.length) {
         const list = el('div', { class: 'card' }, [el('h2', {}, 'Recent')]);
         entries.slice(0, 30).forEach(e => {
           list.appendChild(el('div', {
-            style: 'padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;',
+            style: 'padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px;',
           }, [
-            el('div', {}, [
+            el('div', { style: 'flex: 1;' }, [
               el('div', { style: 'font-weight: 600;' }, `${e.weight_lbs} lb`),
-              e.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, e.notes) : null,
+              el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' },
+                e.notes ? `${e.date} · ${e.notes}` : e.date),
             ]),
-            el('div', { class: 'muted', style: 'font-size: 13px;' }, e.date),
+            el('div', { style: 'display: flex; gap: 6px;' }, [
+              el('button', {
+                style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 10px; font-size: 12px; width: auto;',
+                onclick: () => {
+                  // Populate the form at the top of this same screen; user
+                  // updates and hits Save. sbLogBodyWeight already dedupes by
+                  // date so the same-date save becomes an UPDATE.
+                  $('#bwDate').value = e.date;
+                  $('#bwWeight').value = String(e.weight_lbs);
+                  $('#bwNotes').value = e.notes || '';
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  toast('Editing — change values and hit Save');
+                },
+              }, 'Edit'),
+              el('button', {
+                style: 'background: transparent; color: #d97a7a; border: 1px solid var(--border); padding: 6px 10px; font-size: 12px; width: auto;',
+                onclick: async () => {
+                  if (!confirm(`Delete weigh-in from ${e.date}?`)) return;
+                  try {
+                    await sbDeleteRow('body_weight_log', e.id);
+                    toast('Deleted');
+                    render('body-weight');
+                  } catch (err) {
+                    toast('Could not delete: ' + (err.message || err), true);
+                  }
+                },
+              }, 'Delete'),
+            ]),
           ]));
         });
         app.appendChild(list);
