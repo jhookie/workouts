@@ -546,6 +546,22 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Training plan viewer */
+    .plan-exercise {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .plan-exercise:last-child { border-bottom: none; }
+    .plan-exercise-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .plan-sets {
+      padding-left: 4px;
+    }
+
     /* Widget editor rows */
     .widget-row {
       display: flex;
@@ -2318,6 +2334,7 @@
       else if (view === 'feedback') await renderFeedback(app);
       else if (view === 'body-weight') await renderBodyWeight(app);
       else if (view === 'edit-widgets') await renderEditWidgets(app);
+      else if (view === 'training-plan') await renderTrainingPlan(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -2438,6 +2455,11 @@
         label: 'Active program',
         desc: 'The lift program you have currently active',
         render: (ctx) => widgetActiveProgram_(ctx),
+      },
+      'todays-workout': {
+        label: "Today's workout",
+        desc: 'What your active training plan has programmed for today',
+        render: (ctx) => widgetTodaysWorkout_(ctx),
       },
     };
 
@@ -2621,6 +2643,46 @@
         // Remove border on last child for cleanliness
         const last = card.lastChild;
         if (last && last.style) last.style.borderBottom = 'none';
+        app.appendChild(card);
+      } catch (e) { /* silent */ }
+    }
+
+    async function widgetTodaysWorkout_({ app }) {
+      try {
+        const plan = await sbActiveTrainingPlan();
+        if (!plan) return; // silent when no plan active
+        const today = todayISO();
+        const day = findPlanDay_(plan, today);
+        const next = day ? null : firstUpcomingPlanDay_(plan, today);
+        if (!day && !next) return; // plan ended or hasn't started
+        const shownDay = day || next;
+        const isToday = shownDay.date === today;
+        const wd = new Date(shownDay.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+        // Summarize sessions in one line
+        const summary = (shownDay.sessions || []).map(s => {
+          if (s.type === 'lift') return s.name;
+          if (s.type === 'run') {
+            const bits = [s.name];
+            if (s.target_miles) bits.push(`${s.target_miles} mi`);
+            return bits.join(' · ');
+          }
+          return s.name || '';
+        }).join(' + ');
+
+        const card = el('div', {
+          class: 'card',
+          onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
+          style: 'cursor: pointer;',
+        }, [
+          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+            el('h2', { style: 'margin: 0;' }, isToday ? "Today's workout" : 'Next workout'),
+            el('span', { class: 'muted', style: 'font-size: 12px;' }, isToday ? '' : wd),
+          ]),
+          el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
+            shownDay.week ? `Week ${shownDay.week}` : ''),
+          el('div', { style: 'margin-top: 8px; font-size: 15px; font-weight: 600;' }, summary || '—'),
+        ]);
         app.appendChild(card);
       } catch (e) { /* silent */ }
     }
@@ -4884,6 +4946,205 @@
           },
         }, 'Finish →'),
       ]));
+    }
+
+    // -------- Training Plan --------
+    let _activeTrainingPlanCache = null;
+    let _trainingPlanViewDate = null; // ISO string; null = "today"
+
+    async function sbActiveTrainingPlan(force = false) {
+      if (!force && _activeTrainingPlanCache) return _activeTrainingPlanCache;
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('training_plans')
+        .select('id,name,start_date,end_date,structure,notes,active')
+        .eq('user_id', uid).eq('active', true).is('archived_at', null)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      _activeTrainingPlanCache = data;
+      return data;
+    }
+
+    function findPlanDay_(plan, isoDate) {
+      const days = (plan && plan.structure && plan.structure.days) || [];
+      return days.find(d => d.date === isoDate) || null;
+    }
+
+    function firstUpcomingPlanDay_(plan, fromISO) {
+      const days = (plan && plan.structure && plan.structure.days) || [];
+      return days.find(d => d.date >= fromISO) || null;
+    }
+
+    async function renderTrainingPlan(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Training plan')]));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let plan;
+      try { plan = await sbActiveTrainingPlan(); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (!plan) {
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No active training plan'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
+            "A training plan is a date-anchored schedule that tells you what to do on which day. Different from Programs (which are date-agnostic templates)."),
+          el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px; line-height: 1.5;' },
+            "To create one: build a Strength Plan CSV + Run Plan CSV, drop them in your Running Plans folder, and run:"),
+          el('pre', { style: 'background: var(--surface-2); padding: 10px; border-radius: 8px; font-size: 11px; overflow-x: auto; margin-top: 8px;' },
+            'python3 import_training_plan.py \\\n  --strength "Strength Plan.csv" \\\n  --run      "Run Plan.csv" \\\n  --name     "My Plan" \\\n  --year     2026 \\\n  --activate'),
+        ]));
+        return;
+      }
+
+      const s = plan.structure || {};
+      const cfg = s.config || {};
+      const today = todayISO();
+      const viewDate = _trainingPlanViewDate ||
+                       (findPlanDay_(plan, today) ? today
+                                                 : (firstUpcomingPlanDay_(plan, today) || { date: today }).date);
+      _trainingPlanViewDate = viewDate;
+
+      // Plan header
+      const startDate = cfg.start_date || plan.start_date;
+      const endDate   = cfg.end_date   || plan.end_date;
+      app.appendChild(el('div', { class: 'card' }, [
+        el('h2', { style: 'margin-bottom: 4px;' }, plan.name),
+        el('div', { class: 'muted', style: 'font-size: 13px;' },
+          `${startDate} → ${endDate}${cfg.total_weeks ? ' · ' + cfg.total_weeks + ' weeks' : ''}`),
+      ]));
+
+      // Date navigator — prev / date label / next
+      const dateNav = el('div', {
+        class: 'card',
+        style: 'display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;',
+      }, [
+        el('button', {
+          class: 'cal-nav-btn',
+          onclick: () => { _trainingPlanViewDate = shiftDateISO_(viewDate, -1); render('training-plan'); },
+        }, '‹'),
+        (() => {
+          const wd = new Date(viewDate + 'T12:00:00').toLocaleDateString('en-US', {
+            weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+          });
+          return el('div', { style: 'text-align: center;' }, [
+            el('div', { style: 'font-weight: 600; font-size: 15px;' }, wd),
+            viewDate === today
+              ? el('div', { style: 'font-size: 11px; color: var(--accent); margin-top: 2px;' }, 'TODAY')
+              : el('button', {
+                  style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-top: 2px; font-size: 11px; cursor: pointer; text-decoration: underline; width: auto;',
+                  onclick: () => { _trainingPlanViewDate = today; render('training-plan'); },
+                }, 'Jump to today'),
+          ]);
+        })(),
+        el('button', {
+          class: 'cal-nav-btn',
+          onclick: () => { _trainingPlanViewDate = shiftDateISO_(viewDate, 1); render('training-plan'); },
+        }, '›'),
+      ]);
+      app.appendChild(dateNav);
+
+      // Session cards for the selected date
+      const dayEntry = findPlanDay_(plan, viewDate);
+      if (!dayEntry) {
+        const nextDay = firstUpcomingPlanDay_(plan, viewDate);
+        app.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'Rest day'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            viewDate < startDate ? "Plan hasn't started yet."
+            : viewDate > endDate ? "Plan is over."
+            : "Nothing programmed for this date — take the day."),
+          nextDay ? el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 8px;' },
+            `Next: ${nextDay.date} — ${(nextDay.sessions[0] || {}).name || ''}`) : null,
+        ]));
+        return;
+      }
+
+      // Meta pill — week / block / cycle / dow
+      const metaParts = [];
+      if (dayEntry.week) metaParts.push(`Week ${dayEntry.week}`);
+      if (dayEntry.block) metaParts.push(`Block ${dayEntry.block}`);
+      if (dayEntry.cycle_wk) metaParts.push(`Cycle wk ${dayEntry.cycle_wk}`);
+      if (metaParts.length) {
+        app.appendChild(el('div', { class: 'muted', style: 'font-size: 12px; text-align: center; margin: -4px 0 4px; letter-spacing: 0.05em; text-transform: uppercase;' },
+          metaParts.join(' · ')));
+      }
+
+      // Render each session
+      (dayEntry.sessions || []).forEach(sess => {
+        if (sess.type === 'lift') app.appendChild(renderPlanLiftCard_(sess));
+        else if (sess.type === 'run') app.appendChild(renderPlanRunCard_(sess));
+      });
+    }
+
+    function shiftDateISO_(iso, days) {
+      const d = new Date(iso + 'T12:00:00');
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+
+    function renderPlanLiftCard_(sess) {
+      const card = el('div', { class: 'card' }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;' }, [
+          el('h2', { style: 'margin: 0;' }, sess.name),
+          el('span', { class: 'history-tag tag-lift' }, 'LIFT'),
+        ]),
+      ]);
+      (sess.exercises || []).forEach(ex => {
+        const setsWrap = el('div', { class: 'plan-sets' });
+        (ex.sets || []).forEach(set => {
+          const parts = [];
+          if (set.set_type) parts.push(set.set_type);
+          if (set.target_reps) parts.push(`${set.target_reps} reps`);
+          if (set.percent) parts.push(`${set.percent}%`);
+          if (set.target_weight) parts.push(`${set.target_weight} lb`);
+          if (set.rest) parts.push(`rest ${set.rest}`);
+          setsWrap.appendChild(el('div', { style: 'padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px;' }, [
+            el('div', {}, parts.join(' · ')),
+            set.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic; margin-top: 2px;' }, set.notes) : null,
+          ]));
+        });
+        // Remove border on last set inside this exercise
+        const lastChild = setsWrap.lastChild;
+        if (lastChild && lastChild.style) lastChild.style.borderBottom = 'none';
+
+        card.appendChild(el('div', { class: 'plan-exercise' }, [
+          el('div', { class: 'plan-exercise-head' }, [
+            el('div', { style: 'font-weight: 600;' }, ex.name),
+            ex.muscle ? el('span', { class: 'muted', style: 'font-size: 11px;' }, ex.muscle) : null,
+          ]),
+          setsWrap,
+        ]));
+      });
+      return card;
+    }
+
+    function renderPlanRunCard_(sess) {
+      const rows = [];
+      if (sess.workout_kind) rows.push(['Workout', sess.workout_kind]);
+      if (sess.target_miles != null) rows.push(['Target', `${sess.target_miles} mi`]);
+      if (sess.target_pace_hr) rows.push(['Pace/HR', sess.target_pace_hr]);
+      if (sess.warm_up)   rows.push(['Warm-up', sess.warm_up]);
+      if (sess.main_set)  rows.push(['Main set', sess.main_set]);
+      if (sess.recovery)  rows.push(['Recovery', sess.recovery]);
+      if (sess.cool_down) rows.push(['Cool-down', sess.cool_down]);
+      if (sess.notes)     rows.push(['Notes', sess.notes]);
+
+      return el('div', { class: 'card' }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;' }, [
+          el('h2', { style: 'margin: 0;' }, sess.name),
+          el('span', { class: 'history-tag tag-run' }, 'RUN'),
+        ]),
+        ...rows.map(([k, v]) => el('div', { style: 'padding: 6px 0; border-bottom: 1px solid var(--border);' }, [
+          el('div', { class: 'muted', style: 'font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;' }, k),
+          el('div', { style: 'font-size: 14px; margin-top: 2px;' }, v),
+        ])),
+      ]);
     }
 
     // -------- Edit widgets screen --------
