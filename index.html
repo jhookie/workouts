@@ -546,6 +546,49 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Plan-based lift logger */
+    .plan-log-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .plan-log-row:last-of-type { border-bottom: none; }
+    .plan-log-label {
+      flex: 1;
+      min-width: 0;
+    }
+    .plan-log-inputs {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .plan-log-field {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .plan-log-field label {
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+    }
+    .plan-log-field input {
+      text-align: center;
+      padding: 6px 4px;
+      font-size: 15px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
     /* Training plan viewer */
     .plan-exercise {
       padding: 12px 0;
@@ -2335,6 +2378,7 @@
       else if (view === 'body-weight') await renderBodyWeight(app);
       else if (view === 'edit-widgets') await renderEditWidgets(app);
       else if (view === 'training-plan') await renderTrainingPlan(app);
+      else if (view === 'plan-log-lift') await renderPlanLogLift(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -2916,6 +2960,30 @@
     }
 
     async function renderLift(app) {
+      // If a training plan is active and today has a lift session, route the
+      // user straight into the plan-based logger. This makes tapping "Lift"
+      // from Home do the right thing for plan-users (they don't want the
+      // Push/Pull program logger; they want today's programmed session).
+      try {
+        const plan = await sbActiveTrainingPlan();
+        if (plan) {
+          const today = todayISO();
+          const dayEntry = findPlanDay_(plan, today);
+          if (dayEntry) {
+            const liftSessIdx = (dayEntry.sessions || []).findIndex(s => s.type === 'lift');
+            if (liftSessIdx !== -1) {
+              _planLogRef = {
+                date: today,
+                sessionIndex: liftSessIdx,
+                session: dayEntry.sessions[liftSessIdx],
+                dayEntry,
+              };
+              return render('plan-log-lift');
+            }
+          }
+        }
+      } catch (e) { /* fall through to legacy program-based lift logger */ }
+
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Log Lift'),
         el('span', { class: 'date' }, fmtDateLong(new Date())),
@@ -3191,10 +3259,25 @@
     }
 
     async function renderRun(app) {
+      // Pull off any pre-fill from a training plan tap (target miles + notes).
+      const prefill = _planRunPrefill;
+      _planRunPrefill = null;
+
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Log Run'),
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
+
+      if (prefill) {
+        app.appendChild(el('div', {
+          class: 'card',
+          style: 'background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: var(--accent);',
+        }, [
+          el('div', { style: 'font-size: 12px; color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700;' }, 'From your plan'),
+          el('div', { style: 'margin-top: 4px; font-size: 14px;' },
+            `${prefill.notes || ''}${prefill.distance ? ' · target ' + prefill.distance + ' mi' : ''}`),
+        ]));
+      }
 
       // Pre-fetch shoes for the dropdown (best-effort; if offline, dropdown is empty)
       let shoes = [];
@@ -3204,8 +3287,8 @@
         .concat(shoes.map(s => el('option', { value: s.name }, `${s.name} (${s.totalMiles} mi)`)));
 
       app.appendChild(el('div', { class: 'card' }, [
-        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: todayISO() })]),
-        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1' })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: (prefill && prefill.date) || todayISO() })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1', value: (prefill && prefill.distance != null) ? String(prefill.distance) : '' })]),
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
@@ -3223,7 +3306,7 @@
           el('label', {}, 'Shoe'),
           el('select', { id: 'runShoe' }, shoeOptions),
         ]),
-        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.' })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.', value: (prefill && prefill.notes) || '' })]),
         el('button', {
           onclick: async () => {
             const date = $('#runDate').value;
@@ -5076,9 +5159,9 @@
       }
 
       // Render each session
-      (dayEntry.sessions || []).forEach(sess => {
-        if (sess.type === 'lift') app.appendChild(renderPlanLiftCard_(sess));
-        else if (sess.type === 'run') app.appendChild(renderPlanRunCard_(sess));
+      (dayEntry.sessions || []).forEach((sess, i) => {
+        if (sess.type === 'lift') app.appendChild(renderPlanLiftCard_(sess, viewDate, i, dayEntry));
+        else if (sess.type === 'run') app.appendChild(renderPlanRunCard_(sess, viewDate, i, dayEntry));
       });
     }
 
@@ -5112,7 +5195,24 @@
       return groups;
     }
 
-    function renderPlanLiftCard_(sess) {
+    // Turn a plan exercise's sets into a normalized array where each element
+    // is one actual set to log. Handles the "single-row multi-set" convention
+    // where the coach's sheet uses Set # to mean "how many sets."
+    function expandPlanExerciseSets_(ex) {
+      const raw = Array.isArray(ex.sets) ? ex.sets : [];
+      if (raw.length === 1 && Number(raw[0].set_num) > 1) {
+        const proto = raw[0];
+        const n = Number(proto.set_num);
+        return Array.from({ length: n }, (_, i) => ({ ...proto, set_num: i + 1 }));
+      }
+      return raw;
+    }
+
+    // The date/session-index being logged from the plan. Set when the user
+    // taps "Start logging" on the plan viewer.
+    let _planLogRef = null; // { date, sessionIndex, session, dayEntry }
+
+    function renderPlanLiftCard_(sess, planDate, sessionIndex) {
       const card = el('div', { class: 'card' }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;' }, [
           el('h2', { style: 'margin: 0;' }, sess.name),
@@ -5165,10 +5265,20 @@
           setsWrap,
         ]));
       });
+      // "Start logging" button at the bottom of the card
+      if (planDate != null && sessionIndex != null) {
+        card.appendChild(el('button', {
+          style: 'margin-top: 12px; width: 100%;',
+          onclick: () => {
+            _planLogRef = { date: planDate, sessionIndex, session: sess };
+            render('plan-log-lift');
+          },
+        }, 'Start logging →'));
+      }
       return card;
     }
 
-    function renderPlanRunCard_(sess) {
+    function renderPlanRunCard_(sess, planDate, sessionIndex) {
       const rows = [];
       if (sess.workout_kind) rows.push(['Workout', sess.workout_kind]);
       if (sess.target_miles != null) rows.push(['Target', `${sess.target_miles} mi`]);
@@ -5179,7 +5289,7 @@
       if (sess.cool_down) rows.push(['Cool-down', sess.cool_down]);
       if (sess.notes)     rows.push(['Notes', sess.notes]);
 
-      return el('div', { class: 'card' }, [
+      const card = el('div', { class: 'card' }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;' }, [
           el('h2', { style: 'margin: 0;' }, sess.name),
           el('span', { class: 'history-tag tag-run' }, 'RUN'),
@@ -5189,6 +5299,221 @@
           el('div', { style: 'font-size: 14px; margin-top: 2px;' }, v),
         ])),
       ]);
+      // "Log this run" button — routes to the existing Run logger with the
+      // planned target miles + date pre-filled via _planRunPrefill.
+      if (planDate != null) {
+        card.appendChild(el('button', {
+          style: 'margin-top: 12px; width: 100%;',
+          onclick: () => {
+            _planRunPrefill = {
+              date: planDate,
+              distance: sess.target_miles,
+              notes: sess.name,
+            };
+            render('run');
+          },
+        }, 'Log this run →'));
+      }
+      return card;
+    }
+
+    // Pre-fill for run logger when jumping in from a training plan.
+    let _planRunPrefill = null;
+
+    // -------- Plan-based lift logger --------
+    //
+    // Distinct from the Programs-based Lift logger. Renders one card per
+    // exercise with per-set inputs (actual weight + actual reps), pre-filled
+    // from plan targets. Saves to lift_sessions with a new sets[] JSONB
+    // shape alongside the legacy r1-r4 fields for backward compat.
+    async function renderPlanLogLift(app) {
+      const ref = _planLogRef;
+      if (!ref) {
+        app.appendChild(el('div', { class: 'card' }, 'No plan session selected. Go to Training Plan first.'));
+        return;
+      }
+      const { session, date } = ref;
+
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, session.name || 'Log workout'),
+        el('span', { class: 'date' }, fmtDateLong(new Date(date + 'T12:00:00'))),
+      ]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { render('training-plan'); },
+      }, '← Back to plan'));
+
+      // Date picker (defaults to plan date; user can override e.g. logging late)
+      app.appendChild(el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
+        el('div', { class: 'field', style: 'margin: 0; display: flex; align-items: center; gap: 12px;' }, [
+          el('label', { for: 'planLogDate', style: 'margin: 0; min-width: 70px;' }, 'Date'),
+          el('input', { id: 'planLogDate', type: 'date', value: date, style: 'flex: 1; margin: 0;' }),
+        ]),
+      ]));
+
+      const form = el('div', { id: 'planLogForm' });
+      const exerciseInputs = []; // parallel to session.exercises; each { name, category, sets: [{ weightInput, repsInput, rpeInput, target }], notesInput }
+
+      (session.exercises || []).forEach(ex => {
+        const sets = expandPlanExerciseSets_(ex);
+        const exCard = el('div', { class: 'card' });
+        exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, ex.name),
+          el('span', { class: 'muted', style: 'font-size: 11px;' },
+            ex.muscle ? `${ex.muscle} · ${sets.length} set${sets.length === 1 ? '' : 's'}` : `${sets.length} set${sets.length === 1 ? '' : 's'}`),
+        ]));
+
+        const setInputs = [];
+        sets.forEach((set, idx) => {
+          const targetBits = [];
+          if (set.set_type)         targetBits.push(set.set_type);
+          if (set.target_reps)      targetBits.push(`${set.target_reps} reps`);
+          if (set.target_weight)    targetBits.push(`${set.target_weight} lb`);
+          if (set.percent)          targetBits.push(`${set.percent}%`);
+          const targetStr = targetBits.join(' · ');
+
+          const weightInp = el('input', {
+            type: 'number', step: '0.5', inputmode: 'decimal',
+            placeholder: set.target_weight != null ? String(set.target_weight) : '',
+            value: set.target_weight != null ? String(set.target_weight) : '',
+            style: 'width: 70px;',
+          });
+          const repsInp = el('input', {
+            type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+            placeholder: parsePlanRepDefault_(set.target_reps),
+            value: parsePlanRepDefault_(set.target_reps),
+            style: 'width: 50px;',
+          });
+          const rpeInp = el('input', {
+            type: 'number', step: '0.5', inputmode: 'decimal',
+            placeholder: '—',
+            min: '1', max: '10',
+            style: 'width: 40px;',
+          });
+          setInputs.push({ weightInp, repsInp, rpeInp, target: set });
+
+          exCard.appendChild(el('div', { class: 'plan-log-row' }, [
+            el('div', { class: 'plan-log-label' }, [
+              el('div', { style: 'font-weight: 600; font-size: 13px;' }, `Set ${set.set_num || (idx + 1)}`),
+              el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px;' }, targetStr || 'target: —'),
+            ]),
+            el('div', { class: 'plan-log-inputs' }, [
+              el('div', { class: 'plan-log-field' }, [
+                el('label', {}, 'lb'),
+                weightInp,
+              ]),
+              el('div', { class: 'plan-log-field' }, [
+                el('label', {}, 'reps'),
+                repsInp,
+              ]),
+              el('div', { class: 'plan-log-field' }, [
+                el('label', {}, 'RPE'),
+                rpeInp,
+              ]),
+            ]),
+          ]));
+
+          if (set.notes) {
+            exCard.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic; margin-top: -4px; margin-bottom: 8px; padding-left: 4px;' },
+              set.notes));
+          }
+        });
+
+        // Per-exercise notes
+        const notesInp = el('input', {
+          type: 'text', placeholder: 'Notes (optional)',
+        });
+        exCard.appendChild(el('div', { class: 'field', style: 'margin-top: 8px;' }, [notesInp]));
+
+        exerciseInputs.push({
+          name: ex.name,
+          category: ex.muscle,
+          sets: setInputs,
+          notesInput: notesInp,
+        });
+        form.appendChild(exCard);
+      });
+
+      app.appendChild(form);
+
+      // Session notes
+      const sessionNotesInp = el('input', {
+        id: 'planLogSessionNotes',
+        type: 'text',
+        placeholder: 'How did it feel overall?',
+      });
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field', style: 'margin: 0;' }, [
+          el('label', {}, 'Session notes (optional)'),
+          sessionNotesInp,
+        ]),
+      ]));
+
+      // Save button
+      app.appendChild(el('button', {
+        style: 'margin-top: 16px; width: 100%;',
+        onclick: async () => {
+          const chosenDate = $('#planLogDate').value || date;
+          const entries = exerciseInputs.map(ex => {
+            const setsOut = ex.sets.map(setIn => {
+              const wRaw = setIn.weightInp.value.trim();
+              const rRaw = setIn.repsInp.value.trim();
+              const rpeRaw = setIn.rpeInp.value.trim();
+              return {
+                set_num:       setIn.target.set_num,
+                set_type:      setIn.target.set_type || null,
+                target_reps:   setIn.target.target_reps || null,
+                target_weight: setIn.target.target_weight ?? null,
+                target_percent: setIn.target.percent ?? null,
+                weight:        wRaw === '' ? null : Number(wRaw),
+                reps:          rRaw === '' ? null : Number(rRaw),
+                rpe:           rpeRaw === '' ? null : Number(rpeRaw),
+              };
+            });
+            // Legacy compat fields
+            const firstWeight = setsOut.find(s => s.weight != null);
+            return {
+              name:     ex.name,
+              category: ex.category,
+              weight:   firstWeight ? String(firstWeight.weight) : '',
+              r1: (setsOut[0] && setsOut[0].reps) || '',
+              r2: (setsOut[1] && setsOut[1].reps) || '',
+              r3: (setsOut[2] && setsOut[2].reps) || '',
+              r4: (setsOut[3] && setsOut[3].reps) || '',
+              notes: (ex.notesInput.value || '').trim(),
+              sets: setsOut,
+            };
+          });
+
+          const meta = {
+            date:  chosenDate,
+            block: null,
+            week:  ref.dayEntry ? ref.dayEntry.week : null,
+            day:   session.name || 'Plan',
+            notes: (sessionNotesInp.value || '').trim(),
+          };
+          try {
+            const res = await sbLogLift(entries, meta);
+            if (res.duplicate) toast('Already logged today for this session');
+            else toast('Saved to log');
+            setTimeout(() => render('training-plan'), 900);
+          } catch (e) {
+            toast('Could not save: ' + (e.message || e), true);
+          }
+        },
+      }, 'Save session'));
+    }
+
+    // Parse a target-reps string like "5", "8-10", "AMRAP", "5+", "8-10/side"
+    // → default text for the input. For simple integers, prefill. For ranges
+    // or non-numeric, leave the input empty (placeholder shows the target).
+    function parsePlanRepDefault_(targetReps) {
+      if (!targetReps) return '';
+      const s = String(targetReps).trim();
+      const m = s.match(/^(\d+)$/);
+      if (m) return m[1];
+      return '';
     }
 
     // -------- Edit widgets screen --------
