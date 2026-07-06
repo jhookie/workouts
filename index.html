@@ -2379,6 +2379,7 @@
       else if (view === 'edit-widgets') await renderEditWidgets(app);
       else if (view === 'training-plan') await renderTrainingPlan(app);
       else if (view === 'plan-log-lift') await renderPlanLogLift(app);
+      else if (view === 'lift-edit') await renderLiftEdit(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'plan') renderPlan(app);
     }
@@ -4200,7 +4201,7 @@
     async function sbGetLiftSession(date, day) {
       const uid = currentUser.id;
       const { data, error } = await _sb.from('lift_sessions')
-        .select('date,block_name,week,day,exercises,notes,created_at')
+        .select('id,date,block_name,week,day,exercises,notes,created_at')
         .eq('user_id', uid).eq('date', date).eq('day', day)
         .maybeSingle();
       if (error) throw new Error(error.message);
@@ -4244,12 +4245,23 @@
         return;
       }
 
-      // Header: date + block/week/day
+      // Header: date + block/week/day + Edit button
       const weekdayStr = new Date(session.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
       app.appendChild(el('div', { class: 'card' }, [
-        el('h2', { style: 'margin-bottom: 4px;' }, weekdayStr),
-        el('div', { class: 'muted', style: 'font-size: 13px;' },
-          `${session.block_name || '—'} · Week ${session.week ?? '—'} · Day ${session.day || '—'}`),
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;' }, [
+          el('div', { style: 'flex: 1;' }, [
+            el('h2', { style: 'margin-bottom: 4px;' }, weekdayStr),
+            el('div', { class: 'muted', style: 'font-size: 13px;' },
+              `${session.block_name || '—'} · Week ${session.week ?? '—'} · Day ${session.day || '—'}`),
+          ]),
+          session.id ? el('button', {
+            style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto; white-space: nowrap;',
+            onclick: () => {
+              _liftEditRef = { sessionId: session.id };
+              render('lift-edit');
+            },
+          }, 'Edit') : null,
+        ]),
         session.notes ? el('div', { style: 'margin-top: 10px; padding: 10px; background: var(--surface-2); border-radius: 8px; font-size: 13px; font-style: italic;' },
           session.notes) : null,
       ]));
@@ -5374,8 +5386,10 @@
           const targetStr = targetBits.join(' · ');
 
           const weightInp = el('input', {
-            type: 'number', step: '0.5', inputmode: 'decimal',
-            placeholder: set.target_weight != null ? String(set.target_weight) : '',
+            // Text (not number) so users can log bodyweight exercises as
+            // "BW" or "BW+25" instead of only decimals.
+            type: 'text', inputmode: 'text', autocapitalize: 'characters',
+            placeholder: set.target_weight != null ? String(set.target_weight) : 'BW',
             value: set.target_weight != null ? String(set.target_weight) : '',
             style: 'width: 70px;',
           });
@@ -5460,19 +5474,22 @@
               const wRaw = setIn.weightInp.value.trim();
               const rRaw = setIn.repsInp.value.trim();
               const rpeRaw = setIn.rpeInp.value.trim();
+              // Weight is stored as a string so "BW" / "BW+25" / "45" all
+              // roundtrip cleanly. Downstream chart code already handles
+              // text weights via parseWeightNumber_.
               return {
                 set_num:       setIn.target.set_num,
                 set_type:      setIn.target.set_type || null,
                 target_reps:   setIn.target.target_reps || null,
                 target_weight: setIn.target.target_weight ?? null,
                 target_percent: setIn.target.percent ?? null,
-                weight:        wRaw === '' ? null : Number(wRaw),
+                weight:        wRaw === '' ? null : wRaw,
                 reps:          rRaw === '' ? null : Number(rRaw),
                 rpe:           rpeRaw === '' ? null : Number(rpeRaw),
               };
             });
             // Legacy compat fields
-            const firstWeight = setsOut.find(s => s.weight != null);
+            const firstWeight = setsOut.find(s => s.weight != null && s.weight !== '');
             return {
               name:     ex.name,
               category: ex.category,
@@ -5514,6 +5531,241 @@
       const m = s.match(/^(\d+)$/);
       if (m) return m[1];
       return '';
+    }
+
+    // -------- Edit an already-logged lift session --------
+    // The edit view reuses the per-set input UI from the plan-based logger,
+    // but pulls existing values from lift_sessions and issues an UPDATE on
+    // save instead of inserting a new row.
+    let _liftEditRef = null; // { sessionId }
+
+    async function sbGetLiftSessionById(sessionId) {
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('id,date,block_name,week,day,exercises,notes')
+        .eq('id', sessionId).single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
+    async function sbUpdateLiftSession(sessionId, patch) {
+      const { error } = await _sb.from('lift_sessions')
+        .update(patch).eq('id', sessionId);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    // Convert an existing exercise's legacy r1-r4 shape into a virtual sets[]
+    // array. If sets[] already exists, use it as-is.
+    function normalizeLoggedSets_(ex) {
+      if (Array.isArray(ex.sets) && ex.sets.length) return ex.sets;
+      const reps = [ex.r1, ex.r2, ex.r3, ex.r4]
+        .map(v => (v === '' || v == null) ? null : Number(v))
+        .filter(v => v !== null && !Number.isNaN(v));
+      // If no reps recorded at all, keep a single blank row so the user has
+      // something to edit rather than a missing exercise.
+      if (!reps.length) {
+        return [{ set_num: 1, weight: ex.weight || null, reps: null }];
+      }
+      return reps.map((r, i) => ({
+        set_num: i + 1,
+        weight: ex.weight || null,
+        reps: r,
+      }));
+    }
+
+    async function renderLiftEdit(app) {
+      const ref = _liftEditRef;
+      if (!ref || !ref.sessionId) {
+        app.appendChild(el('div', { class: 'card' }, 'No session selected for editing.'));
+        return;
+      }
+
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Edit session'),
+      ]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => {
+          _liftEditRef = null;
+          if (_liftSessionRef) render('lift-session');
+          else render('calendar');
+        },
+      }, '← Cancel'));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let session;
+      try { session = await sbGetLiftSessionById(ref.sessionId); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      // Session meta card — date + block/week/day label + session notes
+      const dateInp = el('input', { id: 'liftEditDate', type: 'date', value: session.date, style: 'flex: 1; margin: 0;' });
+      app.appendChild(el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
+        el('div', { class: 'field', style: 'margin: 0 0 8px; display: flex; align-items: center; gap: 12px;' }, [
+          el('label', { for: 'liftEditDate', style: 'margin: 0; min-width: 70px;' }, 'Date'),
+          dateInp,
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 12px;' },
+          `${session.block_name || ''} · ${session.week ? 'Wk ' + session.week + ' · ' : ''}Day ${session.day || '—'}`),
+      ]));
+
+      const exerciseInputs = [];
+      const exercisesArr = Array.isArray(session.exercises) ? session.exercises : [];
+
+      exercisesArr.forEach(ex => {
+        const setsList = normalizeLoggedSets_(ex);
+        const exCard = el('div', { class: 'card' });
+        exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, ex.name),
+          el('span', { class: 'muted', style: 'font-size: 11px;' },
+            ex.category ? `${ex.category} · ${setsList.length} set${setsList.length === 1 ? '' : 's'}` : `${setsList.length} set${setsList.length === 1 ? '' : 's'}`),
+        ]));
+
+        const setInputs = [];
+        setsList.forEach((set, idx) => {
+          const targetBits = [];
+          if (set.set_type)      targetBits.push(set.set_type);
+          if (set.target_reps)   targetBits.push(`${set.target_reps} reps`);
+          if (set.target_weight) targetBits.push(`${set.target_weight} lb`);
+          const targetStr = targetBits.join(' · ');
+
+          const weightInp = el('input', {
+            type: 'text', inputmode: 'text', autocapitalize: 'characters',
+            placeholder: 'BW',
+            value: (set.weight != null && set.weight !== '') ? String(set.weight) : '',
+            style: 'width: 70px;',
+          });
+          const repsInp = el('input', {
+            type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+            placeholder: '—',
+            value: (set.reps != null && set.reps !== '') ? String(set.reps) : '',
+            style: 'width: 50px;',
+          });
+          const rpeInp = el('input', {
+            type: 'number', step: '0.5', inputmode: 'decimal',
+            placeholder: '—',
+            value: (set.rpe != null) ? String(set.rpe) : '',
+            min: '1', max: '10',
+            style: 'width: 40px;',
+          });
+          setInputs.push({ weightInp, repsInp, rpeInp, target: set });
+
+          exCard.appendChild(el('div', { class: 'plan-log-row' }, [
+            el('div', { class: 'plan-log-label' }, [
+              el('div', { style: 'font-weight: 600; font-size: 13px;' }, `Set ${set.set_num || (idx + 1)}`),
+              targetStr ? el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px;' }, targetStr) : null,
+            ]),
+            el('div', { class: 'plan-log-inputs' }, [
+              el('div', { class: 'plan-log-field' }, [el('label', {}, 'lb'), weightInp]),
+              el('div', { class: 'plan-log-field' }, [el('label', {}, 'reps'), repsInp]),
+              el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]),
+            ]),
+          ]));
+        });
+
+        const notesInp = el('input', {
+          type: 'text', placeholder: 'Exercise notes (optional)',
+          value: ex.notes || '',
+        });
+        exCard.appendChild(el('div', { class: 'field', style: 'margin-top: 8px;' }, [notesInp]));
+
+        exerciseInputs.push({
+          name: ex.name, category: ex.category,
+          sets: setInputs, notesInput: notesInp,
+        });
+        app.appendChild(exCard);
+      });
+
+      // Session notes
+      const sessionNotesInp = el('input', {
+        id: 'liftEditNotes', type: 'text',
+        placeholder: 'Session notes',
+        value: session.notes || '',
+      });
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field', style: 'margin: 0;' }, [
+          el('label', {}, 'Session notes'),
+          sessionNotesInp,
+        ]),
+      ]));
+
+      // Save button
+      app.appendChild(el('button', {
+        style: 'margin-top: 16px; width: 100%;',
+        onclick: async () => {
+          const newDate = dateInp.value || session.date;
+          const entries = exerciseInputs.map(ex => {
+            const setsOut = ex.sets.map(setIn => {
+              const wRaw = setIn.weightInp.value.trim();
+              const rRaw = setIn.repsInp.value.trim();
+              const rpeRaw = setIn.rpeInp.value.trim();
+              return {
+                ...(setIn.target || {}),
+                weight: wRaw === '' ? null : wRaw,
+                reps:   rRaw === '' ? null : Number(rRaw),
+                rpe:    rpeRaw === '' ? null : Number(rpeRaw),
+              };
+            });
+            const firstWeight = setsOut.find(s => s.weight != null && s.weight !== '');
+            return {
+              name:     ex.name,
+              category: ex.category,
+              weight:   firstWeight ? String(firstWeight.weight) : '',
+              r1: (setsOut[0] && setsOut[0].reps) || '',
+              r2: (setsOut[1] && setsOut[1].reps) || '',
+              r3: (setsOut[2] && setsOut[2].reps) || '',
+              r4: (setsOut[3] && setsOut[3].reps) || '',
+              notes: (ex.notesInput.value || '').trim(),
+              sets: setsOut,
+            };
+          });
+          try {
+            await sbUpdateLiftSession(session.id, {
+              date:      newDate,
+              exercises: entries,
+              notes:     (sessionNotesInp.value || '').trim(),
+            });
+            toast('Session updated');
+            _liftEditRef = null;
+            // If we came from Session Detail, refresh that view with the new date+day
+            if (_liftSessionRef) {
+              _liftSessionRef = { date: newDate, day: session.day };
+              setTimeout(() => render('lift-session'), 600);
+            } else {
+              setTimeout(() => render('calendar'), 600);
+            }
+          } catch (e) {
+            toast('Could not save: ' + (e.message || e), true);
+          }
+        },
+      }, 'Save changes'));
+
+      // Delete option — hidden behind a confirm to prevent accidents
+      app.appendChild(el('div', { style: 'text-align: center; margin-top: 12px;' }, [
+        el('button', {
+          style: 'background: transparent; color: #d97a7a; border: 1px solid var(--border); padding: 8px 16px; font-size: 13px; width: auto;',
+          onclick: async () => {
+            if (!confirm('Delete this session permanently? This cannot be undone.')) return;
+            try {
+              const { error } = await _sb.from('lift_sessions').delete().eq('id', session.id);
+              if (error) throw new Error(error.message);
+              toast('Session deleted');
+              _liftEditRef = null;
+              _liftSessionRef = null;
+              setTimeout(() => render('calendar'), 600);
+            } catch (e) {
+              toast('Could not delete: ' + (e.message || e), true);
+            }
+          },
+        }, 'Delete this session'),
+      ]));
     }
 
     // -------- Edit widgets screen --------
