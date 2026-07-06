@@ -5120,8 +5120,18 @@
         ]),
       ]);
       (sess.exercises || []).forEach(ex => {
-        const groups = groupIdenticalSets_(ex.sets);
-        const totalSets = (ex.sets || []).length;
+        // Detect the "single-row multi-set" convention: if there's only one
+        // set entry AND its set_num > 1, the coach's sheet is using Set # to
+        // mean "how many sets of this prescription." Expand accordingly.
+        const singleRowMulti =
+          Array.isArray(ex.sets) && ex.sets.length === 1 &&
+          Number(ex.sets[0].set_num) > 1;
+        const groups = singleRowMulti
+          ? [{ key: 'accessory', count: Number(ex.sets[0].set_num), set: ex.sets[0] }]
+          : groupIdenticalSets_(ex.sets);
+        const totalSets = singleRowMulti
+          ? Number(ex.sets[0].set_num)
+          : (ex.sets || []).length;
 
         const setsWrap = el('div', { class: 'plan-sets' });
         groups.forEach(group => {
