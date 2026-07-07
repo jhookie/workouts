@@ -1628,7 +1628,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v28.d';
+    const APP_VERSION = 'v28.b';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -4782,69 +4782,53 @@
         return;
       }
 
-      // --- Active training plan banner (top billing) ---
-      // The imported hybrid Strength+Run plan lives in training_plans, not
-      // programs, so surface it here as a first-class entry point so users
-      // don't lose track of it.
-      if (plan) {
-        const s = plan.structure || {};
-        const cfg = s.config || {};
-        const startDate = cfg.start_date || plan.start_date;
-        const endDate   = cfg.end_date   || plan.end_date;
-        const totalWeeks = cfg.total_weeks || '';
-        app.appendChild(el('div', {
-          class: 'card',
-          style: 'cursor: pointer;',
-          onclick: () => render('training-plan'),
-        }, [
-          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
-            el('h2', { style: 'margin: 0;' }, 'Active training plan'),
-            el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Tap to view →'),
-          ]),
-          el('div', { style: 'font-size: 16px; font-weight: 600; margin-top: 8px;' }, plan.name),
-          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' },
-            `${startDate} → ${endDate}${totalWeeks ? ' · ' + totalWeeks + ' weeks' : ''}`),
-        ]));
-      }
-
-      // List view
+      // Bucket programs by state.
       const active = programs.filter(p => p.active && !p.archived);
       const upcoming = programs.filter(p => !p.active && !p.archived);
       const archived = programs.filter(p => p.archived);
 
-      // Fresh-user helper card — friendly context, but keeps flowing so
-      // the "Build a plan" section below stays visible as the main CTA.
-      if (!programs.length && !plan) {
+      const hasAnyMine = !!plan || active.length || upcoming.length || archived.length;
+
+      // --- My plans ---
+      // Unified list of the user's training plans (date-anchored) + programs
+      // (date-agnostic templates). Different underlying tables, one visual
+      // language. Card type is tagged (TRAINING PLAN / PROGRAM) so users
+      // can tell them apart, but the flow is the same: tap → detail view.
+      if (hasAnyMine) {
+        const mineWrap = el('div');
+        mineWrap.appendChild(el('h2', { class: 'section-h' }, 'My plans'));
+
+        // Active — training plan first (only one can be active at a time),
+        // then active program.
+        if (plan || active.length) {
+          mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Active'));
+          if (plan) mineWrap.appendChild(planCard_(plan));
+          active.forEach(p => mineWrap.appendChild(programCard_(p)));
+        }
+
+        if (upcoming.length) {
+          mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Available'));
+          upcoming.forEach(p => mineWrap.appendChild(programCard_(p)));
+        }
+
+        if (archived.length) {
+          mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Archived'));
+          archived.forEach(p => mineWrap.appendChild(programCard_(p)));
+        }
+
+        app.appendChild(mineWrap);
+      } else {
+        // Fresh-user helper card — Build a plan below is the primary CTA.
         app.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'No plans yet'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
-            "Build one below — or upload your own CSV (coming soon)."),
+            "Build one below to get started — or import your own (coming soon)."),
         ]));
       }
 
-      if (active.length) {
-        const wrap = el('div');
-        wrap.appendChild(el('h2', { class: 'section-h' }, 'Active program'));
-        active.forEach(p => wrap.appendChild(programCard_(p)));
-        app.appendChild(wrap);
-      }
-      if (upcoming.length) {
-        const wrap = el('div');
-        wrap.appendChild(el('h2', { class: 'section-h' }, 'Available'));
-        upcoming.forEach(p => wrap.appendChild(programCard_(p)));
-        app.appendChild(wrap);
-      }
-      if (archived.length) {
-        const wrap = el('div');
-        wrap.appendChild(el('h2', { class: 'section-h' }, 'Archived'));
-        archived.forEach(p => wrap.appendChild(programCard_(p)));
-        app.appendChild(wrap);
-      }
-
       // --- Build a plan ---
-      // A section for tools that generate NEW plans/programs. First entry:
-      // the Run Planner (moved from bottom nav in v28.d). Future builders
-      // for lifts/swim/etc. will slot in here as siblings.
+      // Tools that generate NEW plans. First entry: Run Planner (moved from
+      // bottom nav in v28.d). Future builders slot in here as siblings.
       const builderWrap = el('div', { style: 'margin-top: 4px;' });
       builderWrap.appendChild(el('h2', { class: 'section-h' }, 'Build a plan'));
       builderWrap.appendChild(el('div', {
@@ -4860,6 +4844,37 @@
           'Generate a personalized running plan from 1 mile to Half Marathon. Pick a distance, fitness level, and days per week — get a full week-by-week schedule.'),
       ]));
       app.appendChild(builderWrap);
+
+      // --- Import ---
+      // Placeholder for now. Full CSV upload lands in v28.b.2 — needs a
+      // client-side parser + per-type field mapping (programs vs training
+      // plans vs raw activity history). Listing the categories now so
+      // users know what's coming.
+      const importWrap = el('div', { style: 'margin-top: 4px;' });
+      importWrap.appendChild(el('h2', { class: 'section-h' }, 'Import'));
+      importWrap.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
+          "Upload your own workout data or plans from a CSV. In-app upload lands in the next update. For now this is a placeholder."),
+        el('div', { style: 'display: flex; flex-direction: column; gap: 10px; margin-top: 12px;' }, [
+          importPlaceholderRow_('Program CSV', 'Reusable lift templates (Push/Pull, 5/3/1, etc.)'),
+          importPlaceholderRow_('Training Plan CSV', 'Date-anchored schedules like the hybrid Strength+Run plan'),
+          importPlaceholderRow_('Workout History CSV', 'Existing runs, walks, rides, lifts, etc. for analytics'),
+        ]),
+      ]));
+      app.appendChild(importWrap);
+    }
+
+    // Small helper for the Import section — one row per upload type.
+    function importPlaceholderRow_(title, subtitle) {
+      return el('div', {
+        style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);',
+      }, [
+        el('div', { style: 'flex: 1;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 13px;' }, title),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px; line-height: 1.4;' }, subtitle),
+        ]),
+        el('span', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; white-space: nowrap;' }, 'Soon'),
+      ]);
     }
 
     function programCard_(p) {
@@ -4880,6 +4895,7 @@
       }}, [
         el('div', { class: 'program-row' }, [
           el('div', {}, [
+            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, 'PROGRAM'),
             el('div', { class: 'program-name' }, p.name),
             el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
             p.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, p.notes) : null,
@@ -4887,6 +4903,36 @@
           p.active ? el('span', { class: 'program-badge active' }, 'ACTIVE')
                    : (p.archived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED')
                                  : el('span', { class: 'program-badge' }, '')),
+        ]),
+      ]);
+    }
+
+    // Card for a training_plan row. Same visual shape as programCard_ but
+    // distinct data model — training plans are date-anchored, so we show
+    // the date range instead of exercise count.
+    function planCard_(plan) {
+      const s = plan.structure || {};
+      const cfg = s.config || {};
+      const startDate = cfg.start_date || plan.start_date;
+      const endDate   = cfg.end_date   || plan.end_date;
+      const totalWeeks = cfg.total_weeks || (Array.isArray(s.days) ? Math.ceil(s.days.length / 7) : 0);
+      const meta = [
+        totalWeeks ? `${totalWeeks} weeks` : '',
+        startDate ? `${startDate} → ${endDate}` : '',
+      ].filter(Boolean).join(' · ');
+
+      return el('div', {
+        class: 'card program-card',
+        onclick: () => render('training-plan'),
+      }, [
+        el('div', { class: 'program-row' }, [
+          el('div', {}, [
+            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, 'TRAINING PLAN'),
+            el('div', { class: 'program-name' }, plan.name),
+            el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
+            plan.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, plan.notes) : null,
+          ]),
+          plan.active ? el('span', { class: 'program-badge active' }, 'ACTIVE') : null,
         ]),
       ]);
     }
