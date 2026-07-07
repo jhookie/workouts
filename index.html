@@ -1632,7 +1632,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v27';
+    const APP_VERSION = 'v27.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7107,6 +7107,12 @@
           },
         }, 'Sign out'),
       ]));
+
+      // Version stamp — useful for confirming which deploy is running,
+      // especially after a service-worker cache refresh.
+      app.appendChild(el('div', {
+        style: 'text-align: center; color: var(--muted); font-size: 11px; margin-top: 20px; opacity: 0.6;',
+      }, `App ${APP_VERSION}`));
     }
 
     // ======== RUN PLANNER ========
