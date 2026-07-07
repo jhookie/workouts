@@ -1054,7 +1054,7 @@
     .cal-dot.lift     { background: #ff6b35; }
     .cal-dot.run      { background: #7ab7ff; }
     .cal-dot.walk     { background: #7ade95; }
-    .cal-dot.pull     { background: #7affb7; }
+    .cal-dot.pull     { background: #ffd77a; }
     .cal-dot.activity { background: #b47aff; }
 
     .cal-detail {
@@ -1632,7 +1632,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v26.2';
+    const APP_VERSION = 'v26.4';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -1772,33 +1772,60 @@
         _sb.from('walks').select('id,date,distance,duration_secs,notes').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
         _sb.from('activities').select('id,date,activity_type,distance,duration_secs,intensity,notes').eq('user_id', uid).gte('date', startDate).lte('date', endDate),
       ]);
-      const runByDate = {}; (runsR.data || []).forEach(r => { runByDate[r.date] = r; });
-      const liftByDate = {}; (liftsR.data || []).forEach(l => { liftByDate[l.date] = l; });
-      const pullByDate = {}; (pullsR.data || []).forEach(p => { pullByDate[p.date] = p; });
-      const walkByDate = {}; (walksR.data || []).forEach(w => { walkByDate[w.date] = w; });
-      const actsByDate = {}; (actsR.data || []).forEach(a => {
-        (actsByDate[a.date] = actsByDate[a.date] || []).push(a);
-      });
+      // Bucket every row by date as an ARRAY, so multiple sessions of the same
+      // modality on the same day (e.g. morning + evening walk) are all preserved.
+      const push_ = (map, key, val) => { (map[key] = map[key] || []).push(val); };
+      const runsByDate  = {}; (runsR.data  || []).forEach(r => push_(runsByDate,  r.date, r));
+      const liftsByDate = {}; (liftsR.data || []).forEach(l => push_(liftsByDate, l.date, l));
+      const pullsByDate = {}; (pullsR.data || []).forEach(p => push_(pullsByDate, p.date, p));
+      const walksByDate = {}; (walksR.data || []).forEach(w => push_(walksByDate, w.date, w));
+      const actsByDate  = {}; (actsR.data  || []).forEach(a => push_(actsByDate,  a.date, a));
       const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
       const wdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
       const days = [];
+      const fmtTime = secs => secs
+        ? `${Math.floor(secs/60)}:${String(secs%60).padStart(2,'0')}`
+        : '';
       for (let d = 1; d <= lastDay; d++) {
         const ds = `${year}-${pad(month)}-${pad(d)}`;
-        const run = runByDate[ds], lift = liftByDate[ds], pull = pullByDate[ds], walk = walkByDate[ds];
-        const acts = actsByDate[ds] || [];
+        const runsArr  = (runsByDate[ds]  || []).map(r => ({
+          id: r.id,
+          distance: Math.round(Number(r.distance)*100)/100,
+          time: r.duration_secs ? `${Math.floor(r.duration_secs/60)}:${String(r.duration_secs%60).padStart(2,'0')}:00` : '',
+          pace: r.pace || '',
+        }));
+        const liftsArr = (liftsByDate[ds] || []).map(l => ({
+          id: l.id, block: l.block_name, week: l.week, day: l.day,
+        }));
+        const pullsArr = (pullsByDate[ds] || []).map(p => ({
+          id: p.id, total: p.total_reps, weight: 'BW',
+        }));
+        const walksArr = (walksByDate[ds] || []).map(w => ({
+          id: w.id,
+          distance: Math.round(Number(w.distance)*100)/100,
+          time: fmtTime(w.duration_secs),
+        }));
+        const actsArr = (actsByDate[ds] || []).map(a => ({
+          id: a.id, type: a.activity_type,
+          distance: a.distance != null ? Math.round(Number(a.distance)*100)/100 : null,
+          time: fmtTime(a.duration_secs),
+          intensity: a.intensity, notes: a.notes,
+        }));
         const dow = new Date(year, month - 1, d).getDay();
         days.push({
           date: ds, day: d, weekday: wdays[dow],
-          run:    run  ? { id: run.id, distance: Math.round(Number(run.distance)*100)/100, time: run.duration_secs ? `${Math.floor(run.duration_secs/60)}:${String(run.duration_secs%60).padStart(2,'0')}:00` : '', pace: run.pace || '' } : null,
-          lift:   lift ? { id: lift.id, block: lift.block_name, week: lift.week, day: lift.day } : null,
-          pullups:pull ? { id: pull.id, total: pull.total_reps, weight: 'BW' } : null,
-          walk:   walk ? { id: walk.id, distance: Math.round(Number(walk.distance)*100)/100, time: walk.duration_secs ? `${Math.floor(walk.duration_secs/60)}:${String(walk.duration_secs%60).padStart(2,'0')}` : '' } : null,
-          activities: acts.map(a => ({
-            id: a.id, type: a.activity_type,
-            distance: a.distance != null ? Math.round(Number(a.distance)*100)/100 : null,
-            time: a.duration_secs ? `${Math.floor(a.duration_secs/60)}:${String(a.duration_secs%60).padStart(2,'0')}` : '',
-            intensity: a.intensity, notes: a.notes,
-          })),
+          // Full arrays (may be empty). Prefer these in new code.
+          runs:       runsArr,
+          lifts:      liftsArr,
+          pullupsAll: pullsArr,
+          walks:      walksArr,
+          activities: actsArr,
+          // Back-compat singular fields (first entry) so any legacy read-site
+          // keeps working unchanged.
+          run:     runsArr[0]  || null,
+          lift:    liftsArr[0] || null,
+          walk:    walksArr[0] || null,
+          pullups: pullsArr[0] || null,
         });
       }
       const mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -3860,20 +3887,23 @@
       for (let i = 0; i < data.firstDayOfWeek; i++) grid.appendChild(el('div', { class: 'cal-day empty' }));
       const todayISOStr = todayISO();
       data.days.forEach(day => {
-        const hasLift = !!day.lift;
-        const hasRun  = !!day.run;
-        const hasPull = !!day.pullups;
-        const hasWalk = !!day.walk;
-        const hasActivity = Array.isArray(day.activities) && day.activities.length > 0;
-        const hasAny = hasLift || hasRun || hasPull || hasWalk || hasActivity;
+        // One dot per logged instance — e.g. two morning+evening walks show
+        // two green dots. Order chosen for legibility: lifts first, then runs,
+        // walks, activities (ride/hike/etc.), pull-ups.
+        const dots = [];
+        const nLift = (day.lifts      || []).length;
+        const nRun  = (day.runs       || []).length;
+        const nWalk = (day.walks      || []).length;
+        const nAct  = (day.activities || []).length;
+        const nPull = (day.pullupsAll || []).length;
+        for (let i = 0; i < nLift; i++) dots.push(el('div', { class: 'cal-dot lift' }));
+        for (let i = 0; i < nRun;  i++) dots.push(el('div', { class: 'cal-dot run' }));
+        for (let i = 0; i < nWalk; i++) dots.push(el('div', { class: 'cal-dot walk' }));
+        for (let i = 0; i < nAct;  i++) dots.push(el('div', { class: 'cal-dot activity' }));
+        for (let i = 0; i < nPull; i++) dots.push(el('div', { class: 'cal-dot pull' }));
+        const hasAny = dots.length > 0;
         const isToday = day.date === todayISOStr;
         const cls = 'cal-day' + (hasAny ? ' has-activity' : '') + (isToday ? ' today' : '');
-        const dots = [];
-        if (hasLift)     dots.push(el('div', { class: 'cal-dot lift' }));
-        if (hasRun)      dots.push(el('div', { class: 'cal-dot run' }));
-        if (hasWalk)     dots.push(el('div', { class: 'cal-dot walk' }));
-        if (hasActivity) dots.push(el('div', { class: 'cal-dot activity' }));
-        if (hasPull)     dots.push(el('div', { class: 'cal-dot pull' }));
         grid.appendChild(el('button', {
           class: cls,
           'data-date': day.date,
@@ -4112,14 +4142,19 @@
         el('h2', {}, day.weekday + ' · ' + day.date),
       ]);
       const items = [];
-      if (day.lift) {
+      const editBtn = (onclick) => el('button', {
+        style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
+        onclick,
+      }, 'Edit');
+
+      (day.lifts || []).forEach(lift => {
         // Clean description: only include the pieces that are actually set.
         // Plan-based sessions often don't have block/week; they store the
         // full session name in `day`.
         const bits = [];
-        if (day.lift.block) bits.push(day.lift.block);
-        if (day.lift.week)  bits.push(`Week ${day.lift.week}`);
-        if (day.lift.day)   bits.push(day.lift.day);
+        if (lift.block) bits.push(lift.block);
+        if (lift.week)  bits.push(`Week ${lift.week}`);
+        if (lift.day)   bits.push(lift.day);
         const liftDesc = bits.join(' · ');
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #ff9b7a;' }, 'Lift'),
@@ -4127,33 +4162,31 @@
           el('button', {
             style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
             onclick: () => {
-              _liftSessionRef = { date: day.date, day: day.lift.day };
+              _liftSessionRef = { date: day.date, day: lift.day };
               render('lift-session');
             },
           }, 'View session →'),
         ]));
-      }
-      const editBtn = (onclick) => el('button', {
-        style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
-        onclick,
-      }, 'Edit');
+      });
 
-      if (day.run) {
+      (day.runs || []).forEach(run => {
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #7ab7ff;' }, 'Run'),
           el('div', { class: 'muted', style: 'font-size: 13px;' },
-            `${day.run.distance} mi · ${prettyTime_(day.run.time)} · ${day.run.pace}${day.run.shoe ? ' · ' + day.run.shoe : ''}`),
-          day.run.id ? editBtn(() => { _runEditRef = { id: day.run.id }; render('run-edit'); }) : null,
+            `${run.distance} mi · ${prettyTime_(run.time)} · ${run.pace}${run.shoe ? ' · ' + run.shoe : ''}`),
+          run.id ? editBtn(() => { _runEditRef = { id: run.id }; render('run-edit'); }) : null,
         ]));
-      }
-      if (day.walk) {
+      });
+
+      (day.walks || []).forEach(walk => {
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #7ade95;' }, 'Walk'),
           el('div', { class: 'muted', style: 'font-size: 13px;' },
-            `${day.walk.distance} mi${day.walk.time ? ' · ' + day.walk.time : ''}`),
-          day.walk.id ? editBtn(() => { _walkEditRef = { id: day.walk.id }; render('walk-edit'); }) : null,
+            `${walk.distance} mi${walk.time ? ' · ' + walk.time : ''}`),
+          walk.id ? editBtn(() => { _walkEditRef = { id: walk.id }; render('walk-edit'); }) : null,
         ]));
-      }
+      });
+
       (day.activities || []).forEach(act => {
         const kindLabel = { cycling: 'Ride', hiking: 'Hike', swimming: 'Swim', rowing: 'Row', yoga: 'Yoga', other: 'Other' }[act.type] || 'Activity';
         const unit = act.type === 'swimming' ? 'yd' : (act.type === 'rowing' ? 'm' : 'mi');
@@ -4167,14 +4200,15 @@
           act.id ? editBtn(() => { _activityEditRef = { id: act.id }; render('activity-edit'); }) : null,
         ]));
       });
-      if (day.pullups) {
-        items.push(el('div', { style: 'padding: 8px 0;' }, [
+
+      (day.pullupsAll || []).forEach(pull => {
+        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #7affb7;' }, 'Pull-Ups'),
           el('div', { class: 'muted', style: 'font-size: 13px;' },
-            `${day.pullups.total} reps · ${day.pullups.weight || 'BW'}`),
-          day.pullups.id ? editBtn(() => { _pullupsEditRef = { id: day.pullups.id }; render('pullups-edit'); }) : null,
+            `${pull.total} reps · ${pull.weight || 'BW'}`),
+          pull.id ? editBtn(() => { _pullupsEditRef = { id: pull.id }; render('pullups-edit'); }) : null,
         ]));
-      }
+      });
       if (!items.length) {
         card.appendChild(el('div', { class: 'muted', style: 'font-size: 14px;' }, 'No activity logged.'));
       } else {
