@@ -1632,7 +1632,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v26.4';
+    const APP_VERSION = 'v27';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -1702,6 +1702,69 @@
       const { error } = await _sb.from('lift_sessions').insert({ user_id: uid, date: meta.date, block_name: meta.block, week: meta.week, day: meta.day, exercises: entries, notes: meta.notes || null });
       if (error) throw new Error(error.message);
       return { duplicate: false };
+    }
+
+    // Free-form insert: no dup check (users can log multiple ad-hoc sessions
+    // on the same day, same as walks). block_name/week stay null; day holds
+    // the user's session title (or 'Freestyle' by default).
+    async function sbLogLiftFreeform(entries, meta) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions').insert({
+        user_id: uid,
+        date: meta.date,
+        block_name: null,
+        week: null,
+        day: meta.title || 'Freestyle',
+        exercises: entries,
+        notes: meta.notes || null,
+      }).select('id').single();
+      if (error) throw new Error(error.message);
+      return { id: data && data.id };
+    }
+
+    // Pull the user's most recent instance of every exercise they've logged,
+    // for autocomplete + "copy last time" prefill in the free-form logger.
+    // Returns { names: [{name, muscle, lastDate}], byName: Map<lowerName, {...}> }.
+    async function sbLoadExerciseHistory() {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('exercises,date')
+        .eq('user_id', uid)
+        .order('date', { ascending: false })
+        .limit(500);
+      if (error || !data) return { names: [], byName: {} };
+      const byName = {}; // key: lowercase name
+      data.forEach(sess => {
+        (sess.exercises || []).forEach(ex => {
+          const raw = (ex.name || '').trim();
+          if (!raw) return;
+          const key = raw.toLowerCase();
+          if (byName[key]) return; // already have the most recent
+          // Normalize sets from either sets[] or r1..r4 + weight
+          let setsList = [];
+          if (Array.isArray(ex.sets) && ex.sets.length) {
+            setsList = ex.sets.map(s => ({
+              reps: s.reps != null ? String(s.reps) : '',
+              weight: s.weight != null ? String(s.weight) : '',
+            }));
+          } else {
+            const wt = ex.weight != null ? String(ex.weight) : '';
+            for (let i = 1; i <= 4; i++) {
+              const r = ex['r' + i];
+              if (r == null || r === '') continue;
+              setsList.push({ reps: String(r), weight: wt });
+            }
+          }
+          byName[key] = {
+            name: raw,
+            muscle: ex.category || ex.muscle || '',
+            lastDate: sess.date,
+            lastSets: setsList,
+          };
+        });
+      });
+      const names = Object.values(byName).sort((a, b) => a.name.localeCompare(b.name));
+      return { names, byName };
     }
 
     async function sbAnalytics(yearFilter) {
@@ -2395,7 +2458,7 @@
 
       // Logger views (lift/run/pullups/walk/activity-*) don't have their own
       // top-level nav — they all highlight Home.
-      const isLoggerView = view === 'lift' || view === 'run' || view === 'pullups' || view === 'walk' || (view && view.startsWith('activity-'));
+      const isLoggerView = view === 'lift' || view === 'lift-freeform' || view === 'run' || view === 'pullups' || view === 'walk' || (view && view.startsWith('activity-'));
       const navView = isLoggerView ? 'home' : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
@@ -2423,6 +2486,7 @@
       else if (view === 'training-plan') await renderTrainingPlan(app);
       else if (view === 'plan-log-lift') await renderPlanLogLift(app);
       else if (view === 'lift-edit') await renderLiftEdit(app);
+      else if (view === 'lift-freeform') await renderLiftFreeform(app);
       else if (view === 'run-edit') await renderRunEdit(app);
       else if (view === 'walk-edit') await renderWalkEdit(app);
       else if (view === 'activity-edit') await renderActivityEdit(app);
@@ -3054,12 +3118,26 @@
         app.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'No active program'),
           el('p', { class: 'muted', style: 'font-size: 14px;' },
-            'Open the Programs tab and activate one to load exercise templates here.'),
-          el('button', { onclick: () => render('programs'), style: 'margin-top: 12px;' },
-            'Go to Programs'),
+            'Log a lift on the fly, or activate a program in the Programs tab for guided templates.'),
+          el('button', {
+            onclick: () => render('lift-freeform'),
+            style: 'margin-top: 12px;',
+          }, 'Log a lift'),
+          el('button', {
+            onclick: () => render('programs'),
+            style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          }, 'Go to Programs'),
         ]));
         return;
       }
+
+      // Always-available escape hatch to freestyle logging, even when a
+      // program is loaded. Sits above the block/week/day selector so it's
+      // discoverable but out of the way.
+      app.appendChild(el('button', {
+        style: 'margin-bottom: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-size: 13px; padding: 8px 14px; width: auto;',
+        onclick: () => render('lift-freeform'),
+      }, '+ Log a lift outside this program'));
 
       // Initialize liftSelection. Default day suggests the NEXT letter after
       // the most recent lift session (so an A/B rotation cycles A → B → A
@@ -4349,12 +4427,18 @@
 
       // Header: date + block/week/day + Edit button
       const weekdayStr = new Date(session.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      // Only join the pieces that are set — freeform sessions have null
+      // block/week and read cleanly as just their title.
+      const metaBits = [];
+      if (session.block_name) metaBits.push(session.block_name);
+      if (session.week != null && session.week !== '') metaBits.push(`Week ${session.week}`);
+      if (session.day) metaBits.push(session.day);
+      const metaStr = metaBits.join(' · ');
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;' }, [
           el('div', { style: 'flex: 1;' }, [
             el('h2', { style: 'margin-bottom: 4px;' }, weekdayStr),
-            el('div', { class: 'muted', style: 'font-size: 13px;' },
-              `${session.block_name || '—'} · Week ${session.week ?? '—'} · Day ${session.day || '—'}`),
+            metaStr ? el('div', { class: 'muted', style: 'font-size: 13px;' }, metaStr) : null,
           ]),
           session.id ? el('button', {
             style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto; white-space: nowrap;',
@@ -5458,6 +5542,12 @@
         onclick: () => { render('training-plan'); },
       }, '← Back to plan'));
 
+      // Escape hatch: log freestyle instead of the scheduled session.
+      app.appendChild(el('button', {
+        style: 'margin-bottom: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-size: 13px; padding: 8px 14px; width: auto;',
+        onclick: () => render('lift-freeform'),
+      }, '+ Log a different lift instead'));
+
       // Date picker (defaults to plan date; user can override e.g. logging late)
       app.appendChild(el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
         el('div', { class: 'field', style: 'margin: 0; display: flex; align-items: center; gap: 12px;' }, [
@@ -5868,6 +5958,276 @@
           },
         }, 'Delete this session'),
       ]));
+    }
+
+    // -------- Free-form Lift logger (v27) --------
+    // No program, no plan. User types exercise names (autocomplete from their
+    // own history), adds sets, saves. Same lift_sessions row shape as
+    // programmed sessions so History/Session Detail/Progression all just work.
+    async function renderLiftFreeform(app) {
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Log a lift'),
+        el('span', { class: 'date' }, fmtDateLong(new Date())),
+      ]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('home'),
+      }, '← Cancel'));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
+      app.appendChild(skel);
+
+      let history;
+      try { history = await sbLoadExerciseHistory(); }
+      catch (e) { history = { names: [], byName: {} }; }
+      skel.remove();
+
+      // --- Session meta card: date + title ---
+      const dateInp = el('input', {
+        id: 'ffDate', type: 'date', value: todayISO(),
+        style: 'flex: 1; margin: 0;',
+      });
+      const titleInp = el('input', {
+        id: 'ffTitle', type: 'text',
+        placeholder: 'e.g. Push Day, Random Sunday',
+        style: 'flex: 1; margin: 0;',
+      });
+      app.appendChild(el('div', { class: 'card', style: 'padding: 12px 16px;' }, [
+        el('div', { class: 'field', style: 'margin: 0 0 10px; display: flex; align-items: center; gap: 12px;' }, [
+          el('label', { for: 'ffDate', style: 'margin: 0; min-width: 70px;' }, 'Date'),
+          dateInp,
+        ]),
+        el('div', { class: 'field', style: 'margin: 0; display: flex; align-items: center; gap: 12px;' }, [
+          el('label', { for: 'ffTitle', style: 'margin: 0; min-width: 70px;' }, 'Title'),
+          titleInp,
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 6px;' },
+          'Optional. Defaults to "Freestyle" — used only for how the session shows up in History.'),
+      ]));
+
+      // --- Shared datalist for exercise-name autocomplete ---
+      // Populated from user's own history. HTML5 datalist gives native
+      // suggestions dropdown on both mobile and desktop.
+      const dl = el('datalist', { id: 'ffExerciseNames' });
+      history.names.forEach(entry => {
+        dl.appendChild(el('option', { value: entry.name }));
+      });
+      app.appendChild(dl);
+
+      // --- Exercise stack ---
+      // State is held in a mutable array. Adding/removing an exercise
+      // re-renders just the stack, not the whole page.
+      const stackWrap = el('div', { id: 'ffStack' });
+      app.appendChild(stackWrap);
+
+      const MUSCLES = ['', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core', 'Other'];
+      const exercises = []; // [{ id, nameInp, muscleSel, sets: [{weightInp, repsInp, rpeInp}] }]
+      let exCounter = 0;
+
+      function addSetRow(exState, setCard, setNum, prefill) {
+        const weightInp = el('input', {
+          type: 'text', inputmode: 'text', autocapitalize: 'characters',
+          placeholder: 'BW',
+          value: (prefill && prefill.weight) || '',
+          style: 'width: 70px;',
+        });
+        const repsInp = el('input', {
+          type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+          placeholder: '—',
+          value: (prefill && prefill.reps) || '',
+          style: 'width: 50px;',
+        });
+        const rpeInp = el('input', {
+          type: 'number', step: '0.5', inputmode: 'decimal',
+          placeholder: '—', min: '1', max: '10',
+          style: 'width: 40px;',
+        });
+        const setNumEl = el('div', { style: 'font-weight: 600; font-size: 13px;' }, `Set ${setNum}`);
+        const removeBtn = el('button', {
+          style: 'background: transparent; color: var(--muted); border: none; padding: 4px 8px; font-size: 16px; width: auto; line-height: 1;',
+          title: 'Remove set',
+          onclick: () => {
+            const idx = exState.sets.findIndex(s => s.weightInp === weightInp);
+            if (idx === -1) return;
+            exState.sets.splice(idx, 1);
+            row.remove();
+            // Renumber remaining sets in this exercise
+            exState.sets.forEach((s, i) => { s.setNumEl.textContent = `Set ${i + 1}`; });
+          },
+        }, '×');
+        const row = el('div', { class: 'plan-log-row' }, [
+          el('div', { class: 'plan-log-label' }, [setNumEl]),
+          el('div', { class: 'plan-log-inputs' }, [
+            el('div', { class: 'plan-log-field' }, [el('label', {}, 'lb'), weightInp]),
+            el('div', { class: 'plan-log-field' }, [el('label', {}, 'reps'), repsInp]),
+            el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]),
+            removeBtn,
+          ]),
+        ]);
+        setCard.insertBefore(row, setCard.querySelector('.ff-set-actions'));
+        exState.sets.push({ weightInp, repsInp, rpeInp, setNumEl });
+      }
+
+      function renderExerciseCard(exState) {
+        const card = el('div', { class: 'card' });
+        exState.card = card;
+
+        // Header: name input + remove
+        const nameInp = el('input', {
+          type: 'text', placeholder: 'Exercise name (e.g. DB Bench Press)',
+          list: 'ffExerciseNames',
+          style: 'flex: 1; margin: 0;',
+        });
+        exState.nameInp = nameInp;
+
+        const removeExBtn = el('button', {
+          style: 'background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 4px 10px; font-size: 12px; width: auto;',
+          title: 'Remove exercise',
+          onclick: () => {
+            const idx = exercises.findIndex(e => e === exState);
+            if (idx === -1) return;
+            exercises.splice(idx, 1);
+            card.remove();
+          },
+        }, 'Remove');
+
+        card.appendChild(el('div', { style: 'display: flex; gap: 8px; align-items: center; margin-bottom: 10px;' }, [
+          nameInp, removeExBtn,
+        ]));
+
+        // Muscle dropdown
+        const muscleSel = el('select', { style: 'width: 100%; margin-bottom: 10px;' },
+          MUSCLES.map(m => el('option', { value: m }, m || '— Muscle group (optional) —'))
+        );
+        exState.muscleSel = muscleSel;
+        card.appendChild(muscleSel);
+
+        // Set rows container + action buttons row
+        const actionsRow = el('div', { class: 'ff-set-actions', style: 'display: flex; gap: 8px; margin-top: 8px;' }, [
+          el('button', {
+            style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto; flex: 1;',
+            onclick: () => addSetRow(exState, card, exState.sets.length + 1),
+          }, '+ Add set'),
+          el('button', {
+            style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto; flex: 1;',
+            onclick: () => {
+              const key = (nameInp.value || '').trim().toLowerCase();
+              const prev = history.byName[key];
+              if (!prev || !prev.lastSets.length) {
+                toast('No previous session found for "' + (nameInp.value || 'that exercise') + '"', true);
+                return;
+              }
+              // Wipe existing sets, then populate from lastSets
+              exState.sets.slice().forEach(s => {
+                if (s.setNumEl) s.setNumEl.parentElement.parentElement.remove();
+              });
+              exState.sets = [];
+              prev.lastSets.forEach((set, i) => addSetRow(exState, card, i + 1, set));
+              if (prev.muscle) muscleSel.value = prev.muscle;
+              toast('Copied from ' + prev.lastDate);
+            },
+          }, 'Copy last time'),
+        ]);
+        card.appendChild(actionsRow);
+
+        // Auto-fill muscle when the name matches a historical exercise (once,
+        // right after the user stops typing/blurs).
+        nameInp.addEventListener('change', () => {
+          const key = (nameInp.value || '').trim().toLowerCase();
+          const prev = history.byName[key];
+          if (prev && prev.muscle && !muscleSel.value) muscleSel.value = prev.muscle;
+        });
+
+        exState.sets = [];
+        addSetRow(exState, card, 1);
+        return card;
+      }
+
+      function addExercise() {
+        const exState = { id: ++exCounter, sets: [] };
+        exercises.push(exState);
+        const card = renderExerciseCard(exState);
+        stackWrap.appendChild(card);
+      }
+
+      // Seed with one empty card so the user has a place to start typing.
+      addExercise();
+
+      // --- "Add exercise" button ---
+      app.appendChild(el('button', {
+        style: 'margin-top: 8px; margin-bottom: 16px; background: var(--surface-2); color: var(--text); border: 1px dashed var(--border); width: 100%;',
+        onclick: () => addExercise(),
+      }, '+ Add exercise'));
+
+      // --- Session notes ---
+      const sessionNotesInp = el('input', {
+        type: 'text', placeholder: 'Session notes (optional)',
+      });
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field', style: 'margin: 0;' }, [
+          el('label', {}, 'Session notes'),
+          sessionNotesInp,
+        ]),
+      ]));
+
+      // --- Save ---
+      app.appendChild(el('button', {
+        style: 'margin-top: 16px; width: 100%;',
+        onclick: async () => {
+          // Build entries
+          const entries = [];
+          for (const ex of exercises) {
+            const name = (ex.nameInp.value || '').trim();
+            if (!name) continue; // silently skip nameless exercises
+            const setsOut = ex.sets.map((s) => {
+              const wRaw   = s.weightInp.value.trim();
+              const rRaw   = s.repsInp.value.trim();
+              const rpeRaw = s.rpeInp.value.trim();
+              return {
+                weight: wRaw === '' ? null : wRaw,
+                reps:   rRaw === '' ? null : Number(rRaw),
+                rpe:    rpeRaw === '' ? null : Number(rpeRaw),
+              };
+            }).filter(s => s.reps != null || (s.weight != null && s.weight !== ''));
+            if (!setsOut.length) continue; // skip exercises with no actual data
+
+            // Legacy r1..r4 + top-level weight for back-compat with older
+            // read paths (Session Detail, analytics that predate sets[]).
+            const firstW = setsOut.find(s => s.weight != null && s.weight !== '');
+            entries.push({
+              name,
+              category: ex.muscleSel.value || '',
+              weight:   firstW ? String(firstW.weight) : '',
+              r1: (setsOut[0] && setsOut[0].reps) || '',
+              r2: (setsOut[1] && setsOut[1].reps) || '',
+              r3: (setsOut[2] && setsOut[2].reps) || '',
+              r4: (setsOut[3] && setsOut[3].reps) || '',
+              notes: '',
+              sets: setsOut,
+            });
+          }
+
+          if (!entries.length) {
+            toast('Add at least one exercise with a set before saving', true);
+            return;
+          }
+
+          const meta = {
+            date:  dateInp.value || todayISO(),
+            title: (titleInp.value || '').trim(),
+            notes: (sessionNotesInp.value || '').trim(),
+          };
+
+          try {
+            await sbLogLiftFreeform(entries, meta);
+            toast('Session logged');
+            setTimeout(() => render('calendar'), 600);
+          } catch (e) {
+            toast('Could not save: ' + (e.message || e), true);
+          }
+        },
+      }, 'Log session'));
     }
 
     // -------- Edit / delete for non-lift sessions --------
