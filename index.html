@@ -1628,7 +1628,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v28.b';
+    const APP_VERSION = 'v28.c';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -1816,6 +1816,303 @@
       runs.forEach(r => { const y = r.date.slice(0, 4); yearMap[y] = (yearMap[y] || 0) + Number(r.distance); });
       const yearly = Object.entries(yearMap).map(([year, miles]) => ({ year, miles: Math.round(miles * 10) / 10 })).sort((a, b) => Number(a.year) - Number(b.year));
       return { filter: yearFilter, availableYears, summary, monthly, yearly };
+    }
+
+    // Multi-modality analytics fetcher for the v28.c refactor. One round-trip
+    // that returns data for every modality the user has, so the type-tab
+    // switcher can flip instantly without refetching. Year filter same
+    // semantics as sbAnalytics.
+    async function sbAnalyticsMulti(yearFilter) {
+      const uid = currentUser.id;
+      const inRange = (q) => yearFilter === 'all'
+        ? q
+        : q.gte('date', `${yearFilter}-01-01`).lte('date', `${yearFilter}-12-31`);
+
+      // Fetch filtered rows + all-time date lists in parallel. The all-time
+      // date lists let us compute availableYears across ALL modalities, not
+      // just the currently-filtered one.
+      const [
+        runsR, walksR, actsR, liftsR, pullsR,
+        runDatesR, walkDatesR, actDatesR, liftDatesR, pullDatesR,
+      ] = await Promise.all([
+        inRange(_sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid)),
+        inRange(_sb.from('walks').select('date,distance,duration_secs').eq('user_id', uid)),
+        inRange(_sb.from('activities').select('date,activity_type,distance,duration_secs,intensity').eq('user_id', uid)),
+        inRange(_sb.from('lift_sessions').select('date,day,exercises').eq('user_id', uid)),
+        inRange(_sb.from('pullup_sessions').select('date,total_reps,sets').eq('user_id', uid)),
+        _sb.from('runs').select('date').eq('user_id', uid),
+        _sb.from('walks').select('date').eq('user_id', uid),
+        _sb.from('activities').select('date').eq('user_id', uid),
+        _sb.from('lift_sessions').select('date').eq('user_id', uid),
+        _sb.from('pullup_sessions').select('date').eq('user_id', uid),
+      ]);
+
+      // Compute the set of years across ALL modalities so the year filter
+      // shows every year the user has any data for.
+      const allYears = new Set();
+      [runDatesR, walkDatesR, actDatesR, liftDatesR, pullDatesR].forEach(res => {
+        (res.data || []).forEach(r => allYears.add(Number(r.date.slice(0, 4))));
+      });
+      const availableYears = [...allYears].filter(Boolean).sort((a, b) => b - a);
+
+      const runs  = runsR.data  || [];
+      const walks = walksR.data || [];
+      const acts  = actsR.data  || [];
+      const lifts = liftsR.data || [];
+      const pulls = pullsR.data || [];
+
+      // --- Available types (only tabs with actual data) ---
+      const availableTypes = ['all'];
+      if (runs.length)  availableTypes.push('run');
+      if (walks.length) availableTypes.push('walk');
+      const actTypeSet = new Set(acts.map(a => a.activity_type));
+      if (actTypeSet.has('cycling'))  availableTypes.push('ride');
+      if (actTypeSet.has('hiking'))   availableTypes.push('hike');
+      if (actTypeSet.has('swimming')) availableTypes.push('swim');
+      if (lifts.length) availableTypes.push('lift');
+      if (pulls.length) availableTypes.push('pullups');
+
+      // ---- Helpers ----
+      const roundTo = (n, d) => Math.round(n * Math.pow(10, d)) / Math.pow(10, d);
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      // Build a distance-based monthly array for cardio modalities.
+      const monthlyDistance = (rows, distField, showPace) => {
+        if (yearFilter === 'all') return [];
+        const out = [];
+        for (let m = 0; m < 12; m++) {
+          const mr = rows.filter(r => Number(r.date.slice(5, 7)) - 1 === m);
+          const mi = mr.reduce((s, r) => s + (Number(r[distField]) || 0), 0);
+          let mAvgPace = null;
+          if (showPace) {
+            const mpr = mr.filter(r => r.pace);
+            if (mpr.length) {
+              const md = mpr.reduce((s, r) => s + Number(r.distance), 0);
+              const mwp = mpr.reduce((s, r) => { const ps = paceToSecs(r.pace); return s + (ps ? ps * Number(r.distance) : 0); }, 0);
+              mAvgPace = md > 0 ? secsToMMSS(mwp / md) : null;
+            }
+          }
+          out.push({
+            label: monthNames[m],
+            miles: roundTo(mi, 1),
+            runs: mr.length,
+            avgDistance: mr.length ? roundTo(mi / mr.length, 2) : 0,
+            avgPace: mAvgPace || '—',
+          });
+        }
+        return out;
+      };
+      const yearlyDistance = (rows, distField) => {
+        const yearMap = {};
+        rows.forEach(r => {
+          const y = r.date.slice(0, 4);
+          yearMap[y] = (yearMap[y] || 0) + (Number(r[distField]) || 0);
+        });
+        return Object.entries(yearMap)
+          .map(([year, miles]) => ({ year, miles: roundTo(miles, 1) }))
+          .sort((a, b) => Number(a.year) - Number(b.year));
+      };
+      // Count-based monthly (used for lift + pullups where "distance" doesn't apply).
+      const monthlyCount = (rows) => {
+        if (yearFilter === 'all') return [];
+        const out = [];
+        for (let m = 0; m < 12; m++) {
+          const count = rows.filter(r => Number(r.date.slice(5, 7)) - 1 === m).length;
+          out.push({ label: monthNames[m], count });
+        }
+        return out;
+      };
+
+      // ---- Per-modality analytics ----
+
+      // Run (existing shape — keeps renderAnalyticsData_ compatible)
+      const runData = (() => {
+        const totalMi = runs.reduce((s, r) => s + Number(r.distance), 0);
+        const pRuns = runs.filter(r => r.pace);
+        let avgPaceSecs = null;
+        if (pRuns.length) {
+          const td = pRuns.reduce((s, r) => s + Number(r.distance), 0);
+          const wp = pRuns.reduce((s, r) => { const ps = paceToSecs(r.pace); return s + (ps ? ps * Number(r.distance) : 0); }, 0);
+          avgPaceSecs = td > 0 ? wp / td : null;
+        }
+        const tRuns = runs.filter(r => r.duration_secs);
+        const avgTimeMins = tRuns.length ? Math.round(tRuns.reduce((s, r) => s + r.duration_secs, 0) / tRuns.length / 60) : 0;
+        return {
+          summary: {
+            miles: roundTo(totalMi, 1),
+            runs: runs.length,
+            avgPace: avgPaceSecs ? secsToMMSS(avgPaceSecs) : '—',
+            avgDistance: runs.length ? roundTo(totalMi / runs.length, 2) : 0,
+            avgTimeMinutes: avgTimeMins,
+          },
+          monthly: monthlyDistance(runs, 'distance', true),
+          yearly: yearlyDistance(runs, 'distance'),
+        };
+      })();
+
+      // Walk
+      const walkData = (() => {
+        const totalMi = walks.reduce((s, w) => s + Number(w.distance || 0), 0);
+        const totalSecs = walks.reduce((s, w) => s + (Number(w.duration_secs) || 0), 0);
+        return {
+          summary: {
+            miles: roundTo(totalMi, 1),
+            walks: walks.length,
+            avgDistance: walks.length ? roundTo(totalMi / walks.length, 2) : 0,
+            totalHours: roundTo(totalSecs / 3600, 1),
+          },
+          monthly: monthlyDistance(walks, 'distance', false),
+          yearly: yearlyDistance(walks, 'distance'),
+        };
+      })();
+
+      // Activities — one summary per activity_type
+      const buildActData = (typeKey) => {
+        const rows = acts.filter(a => a.activity_type === typeKey);
+        const totalDist = rows.reduce((s, r) => s + (Number(r.distance) || 0), 0);
+        const totalSecs = rows.reduce((s, r) => s + (Number(r.duration_secs) || 0), 0);
+        return {
+          summary: {
+            distance: roundTo(totalDist, 1),
+            sessions: rows.length,
+            avgDistance: rows.length ? roundTo(totalDist / rows.length, 2) : 0,
+            totalHours: roundTo(totalSecs / 3600, 1),
+          },
+          monthly: monthlyDistance(rows, 'distance', false),
+          yearly: yearlyDistance(rows, 'distance'),
+        };
+      };
+      const rideData = buildActData('cycling');
+      const hikeData = buildActData('hiking');
+      const swimData = buildActData('swimming');
+
+      // Lift — different shape (volume + top exercises + session frequency)
+      const liftData = (() => {
+        // Volume per session = sum over exercises of (per-set weight × reps).
+        // Sets can live in ex.sets[] or as legacy r1..r4 + top-level weight.
+        // Handles "BW" (string) as 0 for volume math.
+        const numeric = (v) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
+        };
+        let totalVolume = 0;
+        let totalSets = 0;
+        const perExercise = {}; // { name: { volume, sessions, maxWeight, mostRecentDate } }
+        lifts.forEach(sess => {
+          (sess.exercises || []).forEach(ex => {
+            const name = (ex.name || '').trim();
+            if (!name) return;
+            const bucket = perExercise[name] || (perExercise[name] = { volume: 0, sets: 0, sessions: new Set(), maxWeight: 0, lastDate: sess.date });
+            bucket.sessions.add(sess.date);
+            if (sess.date > bucket.lastDate) bucket.lastDate = sess.date;
+            const topW = numeric(ex.weight);
+            if (Array.isArray(ex.sets) && ex.sets.length) {
+              ex.sets.forEach(s => {
+                const w = numeric(s.weight != null ? s.weight : ex.weight);
+                const r = numeric(s.reps);
+                bucket.volume += w * r;
+                totalVolume += w * r;
+                bucket.sets += 1;
+                totalSets  += 1;
+                if (w > bucket.maxWeight) bucket.maxWeight = w;
+              });
+            } else {
+              // Legacy fallback: r1..r4 with a single top-level weight
+              for (let i = 1; i <= 4; i++) {
+                const r = numeric(ex['r' + i]);
+                if (r > 0) {
+                  bucket.volume += topW * r;
+                  totalVolume += topW * r;
+                  bucket.sets += 1;
+                  totalSets  += 1;
+                }
+              }
+              if (topW > bucket.maxWeight) bucket.maxWeight = topW;
+            }
+          });
+        });
+        // Top 5 exercises by total volume, plus session counts.
+        const topExercises = Object.entries(perExercise)
+          .map(([name, b]) => ({
+            name,
+            volume: Math.round(b.volume),
+            sessions: b.sessions.size,
+            maxWeight: b.maxWeight,
+            lastDate: b.lastDate,
+          }))
+          .sort((a, b) => b.volume - a.volume)
+          .slice(0, 5);
+        return {
+          summary: {
+            sessions: lifts.length,
+            totalVolume: Math.round(totalVolume),
+            totalSets,
+            uniqueExercises: Object.keys(perExercise).length,
+          },
+          monthly: monthlyCount(lifts),
+          topExercises,
+        };
+      })();
+
+      // Pull-Ups
+      const pullData = (() => {
+        const totalReps = pulls.reduce((s, p) => s + (Number(p.total_reps) || 0), 0);
+        let bestSet = 0;
+        pulls.forEach(p => {
+          const setsArr = Array.isArray(p.sets) ? p.sets : [];
+          setsArr.forEach(v => {
+            const n = Number(v);
+            if (n > bestSet) bestSet = n;
+          });
+        });
+        return {
+          summary: {
+            sessions: pulls.length,
+            totalReps,
+            bestSet,
+            avgPerSession: pulls.length ? Math.round(totalReps / pulls.length) : 0,
+          },
+          monthly: monthlyCount(pulls),
+        };
+      })();
+
+      // All — cross-modal summary
+      const dateSet = new Set();
+      [runs, walks, acts, lifts, pulls].forEach(arr =>
+        arr.forEach(r => dateSet.add(r.date)));
+      const allData = {
+        summary: {
+          totalSessions: runs.length + walks.length + acts.length + lifts.length + pulls.length,
+          activeDays: dateSet.size,
+          totalMiles: roundTo(
+            runs.reduce((s, r) => s + Number(r.distance || 0), 0) +
+            walks.reduce((s, r) => s + Number(r.distance || 0), 0) +
+            acts.filter(a => a.activity_type !== 'swimming').reduce((s, r) => s + Number(r.distance || 0), 0)
+          , 1),
+        },
+        byModality: [
+          { key: 'run',    label: 'Runs',      count: runs.length },
+          { key: 'walk',   label: 'Walks',     count: walks.length },
+          { key: 'ride',   label: 'Rides',     count: acts.filter(a => a.activity_type === 'cycling').length },
+          { key: 'hike',   label: 'Hikes',     count: acts.filter(a => a.activity_type === 'hiking').length },
+          { key: 'swim',   label: 'Swims',     count: acts.filter(a => a.activity_type === 'swimming').length },
+          { key: 'lift',   label: 'Lifts',     count: lifts.length },
+          { key: 'pullups',label: 'Pull-Ups',  count: pulls.length },
+        ].filter(m => m.count > 0),
+      };
+
+      return {
+        filter: yearFilter,
+        availableYears,
+        availableTypes,
+        all: allData,
+        run: runData,
+        walk: walkData,
+        ride: rideData,
+        hike: hikeData,
+        swim: swimData,
+        lift: liftData,
+        pullups: pullData,
+      };
     }
 
     async function sbMonth(year, month) {
@@ -3744,39 +4041,59 @@
     }
 
     let analyticsYearFilter = null; // persists across re-renders
+    let analyticsTypeFilter = 'all'; // 'all' | 'run' | 'walk' | 'ride' | 'hike' | 'swim' | 'lift' | 'pullups'
 
     async function renderAnalytics(app) {
-      // Header + segment control stay persistent across filter changes.
-      // Only the data-dependent card region below re-renders on tap, so
-      // the year filter feels like flipping a switch rather than reloading
-      // the page.
+      // v28.c reshape: two persistent segment controls (Type, then Year)
+      // above a data container that swaps content per selection. Data is
+      // fetched once per year change (all modalities in one round-trip)
+      // so tapping between type tabs is instant.
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Analytics')]));
 
-      // Segment container — populated after first data fetch (once we know
-      // the available years). Persistent thereafter.
-      const seg = el('div', { class: 'seg' });
-      app.appendChild(seg);
+      const typeSeg = el('div', { class: 'seg', style: 'margin-bottom: 8px;' });
+      const yearSeg = el('div', { class: 'seg' });
+      app.appendChild(typeSeg);
+      app.appendChild(yearSeg);
 
-      // Data container — its innerHTML gets replaced on each filter tap.
       const dataContainer = el('div', { id: 'analyticsData' });
       app.appendChild(dataContainer);
 
       // Initial skeleton
-      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
-      dataContainer.appendChild(skel);
+      dataContainer.appendChild(el('div', { class: 'card' },
+        el('div', { class: 'skeleton', style: 'height: 100px;' })));
 
-      // Build the segment control given a set of available years.
-      // (Called once — segment content doesn't change between filter taps.)
-      let availableYearsCache = null;
-      const buildSegments = (availableYears) => {
-        seg.innerHTML = '';
+      const TYPE_LABELS = {
+        all: 'All', run: 'Run', walk: 'Walk', ride: 'Ride',
+        hike: 'Hike', swim: 'Swim', lift: 'Lift', pullups: 'Pull-Ups',
+      };
+
+      // Cache of latest fetched dataset. Type-tab changes reuse this;
+      // year-tab changes trigger a refetch.
+      let latest = null;
+
+      const buildTypeSegs = (types) => {
+        typeSeg.innerHTML = '';
+        // If the persisted filter isn't available (user has no data of that
+        // type in this year), fall back to 'all'.
+        if (!types.includes(analyticsTypeFilter)) analyticsTypeFilter = 'all';
+        types.forEach(t => {
+          typeSeg.appendChild(el('button', {
+            'data-opt': t,
+            class: analyticsTypeFilter === t ? 'active' : '',
+            onclick: () => selectType(t),
+          }, TYPE_LABELS[t] || t));
+        });
+      };
+
+      const buildYearSegs = (availableYears) => {
+        yearSeg.innerHTML = '';
         const years = (availableYears || []).slice();
         const thisYr = new Date().getFullYear();
         if (!years.includes(thisYr)) years.unshift(thisYr);
         years.sort((a, b) => b - a);
         const options = years.map(String).concat(['all']);
         options.forEach(opt => {
-          seg.appendChild(el('button', {
+          yearSeg.appendChild(el('button', {
             'data-opt': opt,
             class: analyticsYearFilter === opt ? 'active' : '',
             onclick: () => selectYear(opt),
@@ -3784,21 +4101,25 @@
         });
       };
 
-      // Called when the user taps a segment. Updates active class, shows
-      // a skeleton in the data container, fetches, then swaps in results.
+      const selectType = (t) => {
+        analyticsTypeFilter = t;
+        Array.from(typeSeg.children).forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.opt === t);
+        });
+        if (latest) renderAnalyticsByType_(dataContainer, latest, t);
+      };
+
       const selectYear = async (opt) => {
         analyticsYearFilter = opt;
-        // Toggle active class on segment buttons in place.
-        Array.from(seg.children).forEach(btn => {
+        Array.from(yearSeg.children).forEach(btn => {
           btn.classList.toggle('active', btn.dataset.opt === opt);
         });
-        // Skeleton in the data container while we fetch.
         dataContainer.innerHTML = '';
         dataContainer.appendChild(el('div', { class: 'card' },
           el('div', { class: 'skeleton', style: 'height: 100px;' })));
-        let data;
-        try { data = await sbAnalytics(opt); }
-        catch (e) {
+        try {
+          latest = await sbAnalyticsMulti(opt);
+        } catch (e) {
           dataContainer.innerHTML = '';
           dataContainer.appendChild(el('div', { class: 'card' }, [
             el('h2', {}, 'Could not load'),
@@ -3807,15 +4128,16 @@
           ]));
           return;
         }
-        renderAnalyticsData_(dataContainer, data);
+        buildTypeSegs(latest.availableTypes);
+        renderAnalyticsByType_(dataContainer, latest, analyticsTypeFilter);
       };
 
-      // First fetch — using whatever filter is currently persisted.
-      const initialFilter = analyticsYearFilter || String(new Date().getFullYear());
-      analyticsYearFilter = initialFilter;
-      let firstData;
-      try { firstData = await sbAnalytics(initialFilter); }
-      catch (e) {
+      // First load
+      const initialYear = analyticsYearFilter || String(new Date().getFullYear());
+      analyticsYearFilter = initialYear;
+      try {
+        latest = await sbAnalyticsMulti(initialYear);
+      } catch (e) {
         dataContainer.innerHTML = '';
         dataContainer.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Could not load'),
@@ -3824,72 +4146,155 @@
         ]));
         return;
       }
-      analyticsYearFilter = firstData.filter;
-      availableYearsCache = firstData.availableYears;
-      buildSegments(availableYearsCache);
-      renderAnalyticsData_(dataContainer, firstData);
+      buildTypeSegs(latest.availableTypes);
+      buildYearSegs(latest.availableYears);
+      renderAnalyticsByType_(dataContainer, latest, analyticsTypeFilter);
     }
 
-    // Renders the data-dependent portion of the Analytics tab into the
-    // given container. Called on first load AND on every filter tap.
-    function renderAnalyticsData_(container, data) {
+    // Dispatch analytics rendering by selected type. Kept small and boring —
+    // each helper below owns its own modality view.
+    function renderAnalyticsByType_(container, data, type) {
       container.innerHTML = '';
-
-      // Friendly empty state when there are no runs at all.
-      if (!data.summary || !data.summary.runs) {
+      // Empty overall (no data of any kind)
+      if (data.availableTypes.length <= 1 && !data.all.summary.totalSessions) {
         container.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'Nothing to analyze yet'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
-            'Analytics currently shows run history — total miles, pace trends, best efforts, and monthly breakdown. Log your first run to see it come alive.'),
-          el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px; line-height: 1.5;' },
-            'Analytics for other modalities (strength volume, ride time, etc.) is on the roadmap.'),
-          el('button', {
-            style: 'margin-top: 16px;',
-            onclick: () => render('run'),
-          }, 'Log a run'),
+            'Log your first workout to see it come alive.'),
         ]));
         return;
       }
+      switch (type) {
+        case 'all':     return renderAnalyticsAll_(container, data);
+        case 'run':     return renderAnalyticsDistance_(container, data.run, {
+                          totalLabel: 'Total miles', countLabel: 'runs',
+                          avgDistLabel: 'mi/run',    showPace: true,
+                          showTime: true,            unit: 'mi',
+                        });
+        case 'walk':    return renderAnalyticsDistance_(container, {
+                          summary: {
+                            miles: data.walk.summary.miles,
+                            runs: data.walk.summary.walks,
+                            avgDistance: data.walk.summary.avgDistance,
+                            avgTimeMinutes: null,
+                          },
+                          monthly: data.walk.monthly,
+                          yearly: data.walk.yearly,
+                        }, {
+                          totalLabel: 'Total miles', countLabel: 'walks',
+                          avgDistLabel: 'mi/walk',   showPace: false,
+                          showTime: false,           unit: 'mi',
+                          extraCards: [{
+                            title: 'Total hours',
+                            value: String(data.walk.summary.totalHours),
+                            sub: 'across all walks',
+                          }],
+                        });
+        case 'ride':    return renderAnalyticsActivity_(container, data.ride, 'Ride', 'mi');
+        case 'hike':    return renderAnalyticsActivity_(container, data.hike, 'Hike', 'mi');
+        case 'swim':    return renderAnalyticsActivity_(container, data.swim, 'Swim', 'yd');
+        case 'lift':    return renderAnalyticsLift_(container, data.lift);
+        case 'pullups': return renderAnalyticsPullups_(container, data.pullups);
+      }
+    }
 
-      // Summary stat grid
-      const s = data.summary;
+    // Cross-modal summary.
+    function renderAnalyticsAll_(container, data) {
+      const s = data.all.summary;
       container.appendChild(el('div', { class: 'stat-grid' }, [
         el('div', { class: 'card' }, [
-          el('h2', {}, 'Total miles'),
-          el('div', { class: 'big' }, String(s.miles)),
-          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.runs} runs`),
+          el('h2', {}, 'Total sessions'),
+          el('div', { class: 'big' }, String(s.totalSessions)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.activeDays} active days`),
         ]),
         el('div', { class: 'card' }, [
+          el('h2', {}, 'Total miles'),
+          el('div', { class: 'big' }, String(s.totalMiles)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'runs + walks + activities'),
+        ]),
+      ]));
+      // Sessions by modality
+      const byMod = data.all.byModality;
+      if (byMod.length) {
+        const maxC = Math.max(1, ...byMod.map(m => m.count));
+        const card = el('div', { class: 'card' }, [el('h2', {}, 'Sessions by modality')]);
+        byMod.forEach(m => {
+          const pct = (m.count / maxC) * 100;
+          card.appendChild(el('div', { class: 'bar-row', style: 'padding: 4px 0;' }, [
+            el('div', { class: 'label' }, m.label),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, String(m.count)),
+          ]));
+        });
+        container.appendChild(card);
+      }
+    }
+
+    // Distance-based analytics (Run today; Walk uses a shim; activities go
+    // through renderAnalyticsActivity_ instead since their fields differ).
+    function renderAnalyticsDistance_(container, data, opts) {
+      const s = data.summary;
+      if (!s.runs && !s.walks) {
+        container.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No data for this period'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
+            'Try changing the year filter or logging a session.'),
+        ]));
+        return;
+      }
+      const cards1 = [
+        el('div', { class: 'card' }, [
+          el('h2', {}, opts.totalLabel),
+          el('div', { class: 'big' }, String(s.miles)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.runs} ${opts.countLabel}`),
+        ]),
+      ];
+      if (opts.showPace) {
+        cards1.push(el('div', { class: 'card' }, [
           el('h2', {}, 'Avg pace'),
           el('div', { class: 'big' }, s.avgPace || '—'),
           el('div', { class: 'muted', style: 'margin-top: 4px;' }, '/mi'),
-        ]),
-      ]));
-      container.appendChild(el('div', { class: 'stat-grid' }, [
-        el('div', { class: 'card' }, [
-          el('h2', {}, 'Avg distance'),
-          el('div', { class: 'big' }, String(s.avgDistance)),
-          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'mi/run'),
-        ]),
-        el('div', { class: 'card' }, [
-          el('h2', {}, 'Avg run time'),
-          el('div', { class: 'big' }, String(s.avgTimeMinutes)),
-          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'min'),
-        ]),
-      ]));
+        ]));
+      } else if (opts.extraCards && opts.extraCards[0]) {
+        const ec = opts.extraCards[0];
+        cards1.push(el('div', { class: 'card' }, [
+          el('h2', {}, ec.title),
+          el('div', { class: 'big' }, ec.value),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, ec.sub),
+        ]));
+      }
+      container.appendChild(el('div', { class: 'stat-grid' }, cards1));
 
-      // Monthly mileage (only for specific years)
+      if (opts.showTime && s.avgTimeMinutes != null) {
+        container.appendChild(el('div', { class: 'stat-grid' }, [
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Avg distance'),
+            el('div', { class: 'big' }, String(s.avgDistance)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, opts.avgDistLabel),
+          ]),
+          el('div', { class: 'card' }, [
+            el('h2', {}, 'Avg time'),
+            el('div', { class: 'big' }, String(s.avgTimeMinutes)),
+            el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'min'),
+          ]),
+        ]));
+      }
+
+      // Monthly bars (only for year views)
       if (data.monthly && data.monthly.length) {
         const maxMi = Math.max(1, ...data.monthly.map(m => m.miles));
-        const monthlyCard = el('div', { class: 'card' }, [el('h2', {}, 'Monthly mileage')]);
+        const monthlyCard = el('div', { class: 'card' }, [el('h2', {}, 'Monthly ' + opts.unit)]);
         data.monthly.forEach(m => {
           const pct = (m.miles / maxMi) * 100;
-          const meta = m.runs ? `${m.avgDistance} mi/run · ${m.avgPace}/mi` : 'no runs';
+          const meta = m.runs
+            ? (opts.showPace ? `${m.avgDistance} ${opts.unit}/${opts.countLabel.slice(0,-1)} · ${m.avgPace}/mi`
+                             : `${m.avgDistance} ${opts.unit}/${opts.countLabel.slice(0,-1)}`)
+            : 'nothing logged';
           monthlyCard.appendChild(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
             el('div', { class: 'bar-row' + (m.miles === 0 ? ' zero' : '') }, [
               el('div', { class: 'label' }, m.label),
               el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
-              el('div', { class: 'val' }, m.miles ? String(m.miles) + ' mi' : '—'),
+              el('div', { class: 'val' }, m.miles ? String(m.miles) + ' ' + opts.unit : '—'),
             ]),
             el('div', { style: 'font-size: 11px; color: var(--muted); margin-left: 46px; margin-top: 2px;' }, meta),
           ]));
@@ -3897,7 +4302,7 @@
         container.appendChild(monthlyCard);
       }
 
-      // Year over year (always shown, especially useful for All Time)
+      // Year over year (only for All Time)
       if (data.yearly && data.yearly.length > 1) {
         const yoyCard = el('div', { class: 'card' }, [el('h2', {}, 'Year over year')]);
         const maxY = Math.max(1, ...data.yearly.map(y => y.miles));
@@ -3906,10 +4311,159 @@
           yoyCard.appendChild(el('div', { class: 'bar-row' + (y.miles === 0 ? ' zero' : '') }, [
             el('div', { class: 'label' }, y.year),
             el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
-            el('div', { class: 'val' }, y.miles ? String(y.miles) + ' mi' : '—'),
+            el('div', { class: 'val' }, y.miles ? String(y.miles) + ' ' + opts.unit : '—'),
           ]));
         });
         container.appendChild(yoyCard);
+      }
+    }
+
+    // Ride / Hike / Swim analytics — shared shape.
+    function renderAnalyticsActivity_(container, data, label, unit) {
+      const s = data.summary;
+      if (!s.sessions) {
+        container.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No ' + label.toLowerCase() + ' data for this period'),
+        ]));
+        return;
+      }
+      container.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total distance'),
+          el('div', { class: 'big' }, String(s.distance)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${unit} across ${s.sessions} sessions`),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total hours'),
+          el('div', { class: 'big' }, String(s.totalHours)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `avg ${s.avgDistance} ${unit}/session`),
+        ]),
+      ]));
+      if (data.monthly && data.monthly.length) {
+        const maxMi = Math.max(1, ...data.monthly.map(m => m.miles));
+        const monthlyCard = el('div', { class: 'card' }, [el('h2', {}, 'Monthly ' + unit)]);
+        data.monthly.forEach(m => {
+          const pct = (m.miles / maxMi) * 100;
+          monthlyCard.appendChild(el('div', { class: 'bar-row' + (m.miles === 0 ? ' zero' : '') }, [
+            el('div', { class: 'label' }, m.label),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, m.miles ? String(m.miles) + ' ' + unit : '—'),
+          ]));
+        });
+        container.appendChild(monthlyCard);
+      }
+      if (data.yearly && data.yearly.length > 1) {
+        const yoyCard = el('div', { class: 'card' }, [el('h2', {}, 'Year over year')]);
+        const maxY = Math.max(1, ...data.yearly.map(y => y.miles));
+        data.yearly.forEach(y => {
+          const pct = (y.miles / maxY) * 100;
+          yoyCard.appendChild(el('div', { class: 'bar-row' + (y.miles === 0 ? ' zero' : '') }, [
+            el('div', { class: 'label' }, y.year),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, y.miles ? String(y.miles) + ' ' + unit : '—'),
+          ]));
+        });
+        container.appendChild(yoyCard);
+      }
+    }
+
+    // Lift analytics — volume + session frequency + top exercises.
+    function renderAnalyticsLift_(container, data) {
+      const s = data.summary;
+      if (!s.sessions) {
+        container.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No lift data for this period'),
+        ]));
+        return;
+      }
+      container.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Sessions'),
+          el('div', { class: 'big' }, String(s.sessions)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.totalSets} total sets`),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total volume'),
+          el('div', { class: 'big' }, s.totalVolume.toLocaleString()),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'lb (weight × reps)'),
+        ]),
+      ]));
+
+      // Sessions per month
+      if (data.monthly && data.monthly.length) {
+        const maxC = Math.max(1, ...data.monthly.map(m => m.count));
+        const mcard = el('div', { class: 'card' }, [el('h2', {}, 'Sessions per month')]);
+        data.monthly.forEach(m => {
+          const pct = (m.count / maxC) * 100;
+          mcard.appendChild(el('div', { class: 'bar-row' + (m.count === 0 ? ' zero' : '') }, [
+            el('div', { class: 'label' }, m.label),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, m.count ? String(m.count) : '—'),
+          ]));
+        });
+        container.appendChild(mcard);
+      }
+
+      // Top exercises
+      if (data.topExercises && data.topExercises.length) {
+        const tcard = el('div', { class: 'card' }, [
+          el('h2', {}, 'Top exercises'),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -2px; margin-bottom: 10px;' },
+            'by total volume in this period'),
+        ]);
+        data.topExercises.forEach(ex => {
+          tcard.appendChild(el('div', {
+            style: 'padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer;',
+            onclick: () => {
+              _exerciseProgressionName = ex.name;
+              render('exercise-progression');
+            },
+          }, [
+            el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+              el('div', { style: 'font-weight: 600; font-size: 14px;' }, ex.name),
+              el('div', { class: 'muted', style: 'font-size: 12px;' }, ex.volume.toLocaleString() + ' lb'),
+            ]),
+            el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px;' },
+              `${ex.sessions} session${ex.sessions === 1 ? '' : 's'} · max ${ex.maxWeight || '—'} lb · Tap to see progression →`),
+          ]));
+        });
+        container.appendChild(tcard);
+      }
+    }
+
+    // Pull-Ups analytics.
+    function renderAnalyticsPullups_(container, data) {
+      const s = data.summary;
+      if (!s.sessions) {
+        container.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'No pull-up data for this period'),
+        ]));
+        return;
+      }
+      container.appendChild(el('div', { class: 'stat-grid' }, [
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Total reps'),
+          el('div', { class: 'big' }, s.totalReps.toLocaleString()),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `${s.sessions} sessions`),
+        ]),
+        el('div', { class: 'card' }, [
+          el('h2', {}, 'Best single set'),
+          el('div', { class: 'big' }, String(s.bestSet)),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, `avg ${s.avgPerSession}/session`),
+        ]),
+      ]));
+      if (data.monthly && data.monthly.length) {
+        const maxC = Math.max(1, ...data.monthly.map(m => m.count));
+        const mcard = el('div', { class: 'card' }, [el('h2', {}, 'Sessions per month')]);
+        data.monthly.forEach(m => {
+          const pct = (m.count / maxC) * 100;
+          mcard.appendChild(el('div', { class: 'bar-row' + (m.count === 0 ? ' zero' : '') }, [
+            el('div', { class: 'label' }, m.label),
+            el('div', { class: 'bar-track' }, [el('div', { class: 'bar-fill', style: `width: ${Math.max(2, pct)}%;` })]),
+            el('div', { class: 'val' }, m.count ? String(m.count) : '—'),
+          ]));
+        });
+        container.appendChild(mcard);
       }
     }
 
