@@ -1276,10 +1276,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
       Profile
     </button>
-    <button data-view="plan">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3a3 3 0 0 0 6 0"/><path d="M8 11h8M8 15h5"/></svg>
-      Plan
-    </button>
   </nav>
 
   <div class="toast" id="toast"></div>
@@ -1632,7 +1628,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v28.a';
+    const APP_VERSION = 'v28.d';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2459,7 +2455,14 @@
       // Logger views (lift/run/pullups/walk/activity-*) don't have their own
       // top-level nav — they all highlight Home.
       const isLoggerView = view === 'lift' || view === 'lift-freeform' || view === 'run' || view === 'pullups' || view === 'walk' || (view && view.startsWith('activity-'));
-      const navView = isLoggerView ? 'home' : view;
+      // Sub-views of a top-level tab should highlight their parent tab.
+      // 'plan' (Run Planner) is now a sub-view of Programs; 'training-plan'
+      // (imported plan viewer) is reachable from multiple places but
+      // conceptually belongs to Programs too.
+      const programsSubviews = new Set(['plan', 'training-plan']);
+      const navView = isLoggerView ? 'home'
+                    : programsSubviews.has(view) ? 'programs'
+                    : view;
       document.querySelectorAll('nav.bottom button').forEach(b => {
         b.classList.toggle('active', b.dataset.view === navView);
       });
@@ -4809,15 +4812,14 @@
       const upcoming = programs.filter(p => !p.active && !p.archived);
       const archived = programs.filter(p => p.archived);
 
+      // Fresh-user helper card — friendly context, but keeps flowing so
+      // the "Build a plan" section below stays visible as the main CTA.
       if (!programs.length && !plan) {
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'No programs or plans yet'),
+          el('h2', {}, 'No plans yet'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
-            "Programs are reusable lift templates (e.g. Push/Pull, 5/3/1). Training plans are date-anchored schedules that tell you what to do on each specific day."),
-          el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px;' },
-            'Uploading your own program or plan from a CSV is coming in the next update.'),
+            "Build one below — or upload your own CSV (coming soon)."),
         ]));
-        return;
       }
 
       if (active.length) {
@@ -4838,6 +4840,26 @@
         archived.forEach(p => wrap.appendChild(programCard_(p)));
         app.appendChild(wrap);
       }
+
+      // --- Build a plan ---
+      // A section for tools that generate NEW plans/programs. First entry:
+      // the Run Planner (moved from bottom nav in v28.d). Future builders
+      // for lifts/swim/etc. will slot in here as siblings.
+      const builderWrap = el('div', { style: 'margin-top: 4px;' });
+      builderWrap.appendChild(el('h2', { class: 'section-h' }, 'Build a plan'));
+      builderWrap.appendChild(el('div', {
+        class: 'card',
+        style: 'cursor: pointer;',
+        onclick: () => render('plan'),
+      }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, 'Run Planner'),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
+          'Generate a personalized running plan from 1 mile to Half Marathon. Pick a distance, fitness level, and days per week — get a full week-by-week schedule.'),
+      ]));
+      app.appendChild(builderWrap);
     }
 
     function programCard_(p) {
@@ -5280,6 +5302,13 @@
 
     async function renderTrainingPlan(app) {
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Training plan')]));
+      // Back link — this screen is reachable from Home widget + Programs
+      // banner, both of which live "under" the Programs nav slot.
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('programs'),
+      }, '← Back to Programs'));
 
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
       app.appendChild(skel);
@@ -7320,6 +7349,13 @@
 
     function renderPlan(app) {
       app.appendChild(el('header', { class:'top' }, [el('h1', {}, 'Run Planner')]));
+      // Back link — Run Planner used to live in bottom nav; now it's a
+      // builder card inside Programs, so give users a way back.
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('programs'),
+      }, '← Back to Programs'));
       const root = el('div');
       app.appendChild(root);
       let savedState = {};
