@@ -1050,12 +1050,22 @@
       gap: 3px;
       justify-content: flex-end;
     }
+    /* Dot colors are CSS variables so users can customize them at runtime
+       via Profile → Calendar colors. Defaults set here; overrides applied
+       on :root by setDotColors_() from localStorage.  */
+    :root {
+      --dot-lift:     #ff6b35;
+      --dot-run:      #7ab7ff;
+      --dot-walk:     #7ade95;
+      --dot-pull:     #ffd77a;
+      --dot-activity: #b47aff;
+    }
     .cal-dot { width: 5px; height: 5px; border-radius: 50%; }
-    .cal-dot.lift     { background: #ff6b35; }
-    .cal-dot.run      { background: #7ab7ff; }
-    .cal-dot.walk     { background: #7ade95; }
-    .cal-dot.pull     { background: #ffd77a; }
-    .cal-dot.activity { background: #b47aff; }
+    .cal-dot.lift     { background: var(--dot-lift); }
+    .cal-dot.run      { background: var(--dot-run); }
+    .cal-dot.walk     { background: var(--dot-walk); }
+    .cal-dot.pull     { background: var(--dot-pull); }
+    .cal-dot.activity { background: var(--dot-activity); }
 
     .cal-detail {
       margin-top: 12px;
@@ -1281,6 +1291,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script>
     // -------- localStorage keys --------
     const CONFIG_KEY = 'workoutAppConfig_v1';
@@ -1628,7 +1639,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v28.c';
+    const APP_VERSION = 'v29';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -1699,6 +1710,300 @@
       if (error) throw new Error(error.message);
       return { duplicate: false };
     }
+
+    // -------- CSV import (v28.b.2) --------
+    // Client-side parsing via Papa Parse (loaded from CDN in <head>).
+    // Two upload types supported here: programs and cardio history. Lift
+    // history + training plans defer to v28.b.3.
+
+    // Parse a File object as CSV. Returns { rows, errors, meta }.
+    function parseCsvFile_(file) {
+      return new Promise((resolve, reject) => {
+        if (typeof Papa === 'undefined') {
+          reject(new Error('CSV parser (Papa Parse) not loaded. Refresh and try again.'));
+          return;
+        }
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: h => (h || '').trim(),
+          complete: (results) => resolve(results),
+          error: (err) => reject(err),
+        });
+      });
+    }
+
+    // Download an arbitrary string as a file (used for CSV templates).
+    function downloadFile_(filename, content, mimeType) {
+      const blob = new Blob([content], { type: (mimeType || 'text/plain') + ';charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+    }
+
+    // Build the programs.structure JSONB from parsed CSV rows. Mirrors the
+    // Python import_program.py parse_csv logic so both paths produce
+    // identical shapes. Throws with a user-friendly message on bad input.
+    const PROGRAM_HEADER_ALIASES = {
+      block:       ['block', 'block name', 'block_name', 'phase'],
+      week:        ['week', 'wk'],
+      day:         ['day'],
+      exercise:    ['exercise', 'name', 'exercise name'],
+      category:    ['category', 'muscle', 'group'],
+      sets:        ['sets', 'num sets', '# sets'],
+      target_reps: ['target reps', 'target', 'reps', 'rep range'],
+      notes:       ['notes', 'exercise notes', 'comment'],
+    };
+
+    function programStructureFromRows_(rows, dayTitlesArg) {
+      if (!Array.isArray(rows) || !rows.length) throw new Error('CSV had no data rows.');
+
+      // Papa's header:true gives us row objects. Match aliases against the
+      // actual header names (case-insensitive).
+      const headers = Object.keys(rows[0] || {});
+      const headersLower = headers.map(h => h.toLowerCase().trim());
+      const colMap = {};
+      for (const [canon, aliases] of Object.entries(PROGRAM_HEADER_ALIASES)) {
+        for (const alias of aliases) {
+          const i = headersLower.indexOf(alias);
+          if (i !== -1) { colMap[canon] = headers[i]; break; }
+        }
+      }
+      const missing = ['week', 'day', 'exercise'].filter(k => !colMap[k]);
+      if (missing.length) {
+        throw new Error(`CSV missing required column(s): ${missing.join(', ')}. Headers found: ${headers.join(', ')}`);
+      }
+
+      const cell = (row, canon) => {
+        const key = colMap[canon];
+        return key ? String(row[key] == null ? '' : row[key]).trim() : '';
+      };
+      const numOrNone = (s) => {
+        s = (s || '').trim();
+        if (!s) return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      const weeksMap = {}; // week → { block_name, days: { A: [...], ... } }
+      const daysSeen = new Set();
+      const weeksSeen = new Set();
+
+      rows.forEach(row => {
+        const week = numOrNone(cell(row, 'week'));
+        if (week == null) return;
+        const day = cell(row, 'day').toUpperCase();
+        if (!day) return;
+        const exname = cell(row, 'exercise');
+        if (!exname) return;
+        const block = cell(row, 'block') || null;
+
+        weeksSeen.add(week);
+        daysSeen.add(day);
+        if (!weeksMap[week]) weeksMap[week] = { block_name: block, days: {} };
+        if (block && !weeksMap[week].block_name) weeksMap[week].block_name = block;
+        if (!weeksMap[week].days[day]) weeksMap[week].days[day] = [];
+        weeksMap[week].days[day].push({
+          name:        exname,
+          category:    cell(row, 'category') || null,
+          sets:        numOrNone(cell(row, 'sets')),
+          target_reps: cell(row, 'target_reps') || null,
+          notes:       cell(row, 'notes') || null,
+        });
+      });
+
+      if (!Object.keys(weeksMap).length) throw new Error('No usable rows found in the CSV. Check that Week, Day, and Exercise are filled in.');
+
+      const weeksSorted = [...weeksSeen].sort((a, b) => a - b);
+      const dayTitles = {};
+      if (dayTitlesArg) {
+        dayTitlesArg.split(',').forEach(chunk => {
+          if (chunk.includes('=')) {
+            const [k, v] = chunk.split('=');
+            dayTitles[k.trim().toUpperCase()] = v.trim();
+          }
+        });
+      }
+      const weeksOut = weeksSorted.map(w => ({
+        week: w,
+        block_name: weeksMap[w].block_name,
+        days: weeksMap[w].days,
+      }));
+
+      return {
+        weeks_total: Math.max(...weeksSeen),
+        day_letters: [...daysSeen].sort(),
+        day_titles:  dayTitles,
+        weeks:       weeksOut,
+      };
+    }
+
+    // Upsert a program: update-if-same-name, else insert. Mirrors the
+    // Python script's behavior so re-importing with the same name updates.
+    async function sbUpsertProgramFromCsv(name, structure, notes) {
+      const uid = currentUser.id;
+      const { data: existing, error: findErr } = await _sb.from('programs')
+        .select('id').eq('user_id', uid).eq('name', name).limit(1);
+      if (findErr) throw new Error(findErr.message);
+
+      if (existing && existing.length) {
+        const patch = { structure };
+        if (notes !== undefined && notes !== null) patch.notes = notes;
+        const { error } = await _sb.from('programs').update(patch).eq('id', existing[0].id);
+        if (error) throw new Error(error.message);
+        return { id: existing[0].id, updated: true };
+      }
+      const { data, error } = await _sb.from('programs').insert({
+        user_id: uid,
+        name,
+        notes: notes || null,
+        active: false,
+        structure,
+      }).select('id').single();
+      if (error) throw new Error(error.message);
+      return { id: data.id, updated: false };
+    }
+
+    // Cardio history CSV: covers runs, walks, and generic activities
+    // (rides, hikes, swims, etc.). Single CSV with a Type column.
+    //
+    // Headers: Type, Date, Distance, Duration, Pace, Notes, Activity Type
+    //  - Type: run | walk | activity
+    //  - Date: YYYY-MM-DD (or common variants — Papa Parse handles quoting)
+    //  - Distance: number (mi for run/walk/most activities, yd for swim, m for row)
+    //  - Duration: mm:ss or hh:mm:ss
+    //  - Pace: mm:ss (mostly relevant for runs)
+    //  - Activity Type: cycling | hiking | swimming | rowing | yoga | other
+    //                   (required when Type=activity)
+    const HISTORY_HEADER_ALIASES = {
+      type:          ['type', 'kind'],
+      date:          ['date'],
+      distance:      ['distance', 'miles', 'dist'],
+      duration:      ['duration', 'time'],
+      pace:          ['pace'],
+      notes:         ['notes', 'comment'],
+      activity_type: ['activity type', 'activity_type', 'sport', 'subtype'],
+    };
+
+    function parseDurationSecs_(str) {
+      if (str == null) return null;
+      const s = String(str).trim();
+      if (!s) return null;
+      const parts = s.split(':').map(p => Number(p.trim()));
+      if (parts.some(n => !Number.isFinite(n))) return null;
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 1) return Math.round(parts[0] * 60); // treat bare number as minutes
+      return null;
+    }
+
+    // Bulk insert cardio history from parsed CSV rows. Returns
+    // { runs, walks, activities, skipped } counts.
+    async function sbBulkInsertCardioHistory(rows) {
+      const uid = currentUser.id;
+      if (!rows || !rows.length) throw new Error('CSV had no data rows.');
+
+      // Header alias resolution
+      const headers = Object.keys(rows[0] || {});
+      const headersLower = headers.map(h => h.toLowerCase().trim());
+      const colMap = {};
+      for (const [canon, aliases] of Object.entries(HISTORY_HEADER_ALIASES)) {
+        for (const alias of aliases) {
+          const i = headersLower.indexOf(alias);
+          if (i !== -1) { colMap[canon] = headers[i]; break; }
+        }
+      }
+      if (!colMap.type || !colMap.date) {
+        throw new Error(`CSV missing required column(s): Type, Date. Headers found: ${headers.join(', ')}`);
+      }
+      const cell = (row, canon) => {
+        const key = colMap[canon];
+        return key ? String(row[key] == null ? '' : row[key]).trim() : '';
+      };
+      const numOrNull = (s) => {
+        s = (s || '').trim();
+        if (!s) return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      const runs = [], walks = [], activities = [];
+      let skipped = 0;
+
+      rows.forEach(row => {
+        const type = cell(row, 'type').toLowerCase();
+        const date = cell(row, 'date');
+        if (!type || !date) { skipped++; return; }
+        const distance = numOrNull(cell(row, 'distance'));
+        const durationSecs = parseDurationSecs_(cell(row, 'duration'));
+        const notes = cell(row, 'notes') || null;
+
+        if (type === 'run') {
+          const pace = cell(row, 'pace') || null;
+          runs.push({ user_id: uid, date, distance, duration_secs: durationSecs, pace, notes });
+        } else if (type === 'walk') {
+          walks.push({ user_id: uid, date, distance, duration_secs: durationSecs, notes });
+        } else if (type === 'activity') {
+          const activity_type = (cell(row, 'activity_type') || 'other').toLowerCase();
+          activities.push({
+            user_id: uid, date, activity_type,
+            distance, duration_secs: durationSecs, notes,
+          });
+        } else {
+          skipped++;
+        }
+      });
+
+      const results = { runs: 0, walks: 0, activities: 0, skipped };
+      if (runs.length) {
+        const { error } = await _sb.from('runs').insert(runs);
+        if (error) throw new Error('Runs insert failed: ' + error.message);
+        results.runs = runs.length;
+      }
+      if (walks.length) {
+        const { error } = await _sb.from('walks').insert(walks);
+        if (error) throw new Error('Walks insert failed: ' + error.message);
+        results.walks = walks.length;
+      }
+      if (activities.length) {
+        const { error } = await _sb.from('activities').insert(activities);
+        if (error) throw new Error('Activities insert failed: ' + error.message);
+        results.activities = activities.length;
+      }
+      return results;
+    }
+
+    // CSV template strings — kept as constants so the download button and
+    // any inline preview stay in sync.
+    const PROGRAM_CSV_TEMPLATE = [
+      'Block,Week,Day,Exercise,Category,Sets,Target Reps,Notes',
+      'Block 1 - Chest Priority,1,A,Bench Press,Chest,3,8-10,',
+      'Block 1 - Chest Priority,1,A,Incline DB Press,Chest,3,10-12,leave 1 in tank',
+      'Block 1 - Chest Priority,1,B,Barbell Row,Back,3,8-10,',
+      'Block 1 - Chest Priority,1,B,Lat Pulldown,Back,3,10-12,',
+      'Block 1 - Chest Priority,2,A,Bench Press,Chest,3,7-9,push for +1 rep',
+      'Block 1 - Chest Priority,2,A,Incline DB Press,Chest,3,8-10,',
+      'Block 1 - Chest Priority,2,B,Barbell Row,Back,3,7-9,',
+      'Block 1 - Chest Priority,2,B,Lat Pulldown,Back,3,8-10,',
+    ].join('\n') + '\n';
+
+    const HISTORY_CSV_TEMPLATE = [
+      'Type,Date,Distance,Duration,Pace,Notes,Activity Type',
+      'run,2026-01-15,5.2,45:00,8:39,Morning run,',
+      'run,2026-01-17,3.1,26:30,8:33,,',
+      'walk,2026-01-16,2.1,32:00,,Cool-down walk with the dog,',
+      'walk,2026-01-18,1.5,24:00,,,',
+      'activity,2026-01-20,15.0,52:00,,Sunday ride,cycling',
+      'activity,2026-01-21,4.5,1:30:00,,Weekend hike,hiking',
+      'activity,2026-01-22,1000,25:00,,Pool session,swimming',
+    ].join('\n') + '\n';
 
     // Free-form insert: no dup check (users can log multiple ad-hoc sessions
     // on the same day, same as walks). block_name/week stay null; day holds
@@ -2213,6 +2518,98 @@
         bestEfforts.push({ bucket: b.label, pace: best.pace, time: best.duration_secs ? `${Math.floor(best.duration_secs/60)}:${String(best.duration_secs%60).padStart(2,'0')}:00` : '', distance: Math.round(Number(best.distance)*100)/100, date: best.date });
       });
       return { shoes, bestEfforts };
+    }
+
+    // -------- Dot colors (calendar) --------
+    // User-customizable calendar dot colors, stored per-device in
+    // localStorage. Applied via CSS variables so runtime updates take
+    // effect immediately without re-render. Server-side sync is a future
+    // enhancement (would move to user_profiles.dot_colors JSONB).
+    const DOT_COLOR_KEYS = ['lift', 'run', 'walk', 'pull', 'activity'];
+    const DOT_COLOR_DEFAULTS = {
+      lift:     '#ff6b35',
+      run:      '#7ab7ff',
+      walk:     '#7ade95',
+      pull:     '#ffd77a',
+      activity: '#b47aff',
+    };
+    const DOT_COLOR_LABELS = {
+      lift:     'Lift',
+      run:      'Run',
+      walk:     'Walk',
+      pull:     'Pull-Ups',
+      activity: 'Ride / Hike / Swim / other',
+    };
+
+    function loadDotColors_() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('dotColors_v1') || '{}');
+        return Object.assign({}, DOT_COLOR_DEFAULTS, saved);
+      } catch (e) { return { ...DOT_COLOR_DEFAULTS }; }
+    }
+    function saveDotColors_(colors) {
+      try { localStorage.setItem('dotColors_v1', JSON.stringify(colors)); } catch (e) {}
+    }
+    function applyDotColors_(colors) {
+      DOT_COLOR_KEYS.forEach(k => {
+        const val = colors[k] || DOT_COLOR_DEFAULTS[k];
+        document.documentElement.style.setProperty('--dot-' + k, val);
+      });
+    }
+    // Apply on script boot so calendar renders with the user's colors from
+    // the first paint — no flash of default palette.
+    applyDotColors_(loadDotColors_());
+
+    async function renderDotColors(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Calendar colors')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('profile'),
+      }, '← Back to Profile'));
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
+          "Pick a color for each modality's calendar dot. Changes save automatically to this device and update everywhere calendar dots appear."),
+      ]));
+
+      const colors = loadDotColors_();
+      const rows = el('div', { class: 'card' });
+      DOT_COLOR_KEYS.forEach((k, idx) => {
+        const swatch = el('div', {
+          style: `width: 20px; height: 20px; border-radius: 50%; background: ${colors[k]}; border: 1px solid var(--border); flex-shrink: 0;`,
+        });
+        const picker = el('input', {
+          type: 'color', value: colors[k],
+          style: 'width: 44px; height: 28px; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 4px; background: transparent; cursor: pointer;',
+          oninput: (e) => {
+            colors[k] = e.target.value;
+            swatch.style.background = e.target.value;
+            saveDotColors_(colors);
+            applyDotColors_(colors);
+          },
+        });
+        rows.appendChild(el('div', {
+          style: 'display: flex; align-items: center; gap: 12px; padding: 10px 0;'
+                 + (idx < DOT_COLOR_KEYS.length - 1 ? ' border-bottom: 1px solid var(--border);' : ''),
+        }, [
+          swatch,
+          el('div', { style: 'flex: 1; font-size: 14px;' }, DOT_COLOR_LABELS[k]),
+          picker,
+        ]));
+      });
+      app.appendChild(rows);
+
+      // Reset button
+      app.appendChild(el('button', {
+        style: 'margin-top: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+        onclick: () => {
+          saveDotColors_(DOT_COLOR_DEFAULTS);
+          applyDotColors_(DOT_COLOR_DEFAULTS);
+          toast('Reset to defaults');
+          render('dot-colors');
+        },
+      }, 'Reset to defaults'));
     }
 
     // -------- DOM helpers --------
@@ -2792,6 +3189,7 @@
       else if (view === 'activity-edit') await renderActivityEdit(app);
       else if (view === 'pullups-edit') await renderPullupsEdit(app);
       else if (view === 'profile') await renderProfile(app);
+      else if (view === 'dot-colors') await renderDotColors(app);
       else if (view === 'plan') renderPlan(app);
     }
 
@@ -5400,34 +5798,154 @@
       app.appendChild(builderWrap);
 
       // --- Import ---
-      // Placeholder for now. Full CSV upload lands in v28.b.2 — needs a
-      // client-side parser + per-type field mapping (programs vs training
-      // plans vs raw activity history). Listing the categories now so
-      // users know what's coming.
+      // Programs + cardio history: working. Lift history + training plans:
+      // still deferred (need per-exercise JSONB assembly / dual-CSV merge).
       const importWrap = el('div', { style: 'margin-top: 4px;' });
       importWrap.appendChild(el('h2', { class: 'section-h' }, 'Import'));
+      importWrap.appendChild(importProgramCard_());
+      importWrap.appendChild(importHistoryCard_());
       importWrap.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
-          "Upload your own workout data or plans from a CSV. In-app upload lands in the next update. For now this is a placeholder."),
-        el('div', { style: 'display: flex; flex-direction: column; gap: 10px; margin-top: 12px;' }, [
-          importPlaceholderRow_('Program CSV', 'Reusable lift templates (Push/Pull, 5/3/1, etc.)'),
-          importPlaceholderRow_('Training Plan CSV', 'Date-anchored schedules like the hybrid Strength+Run plan'),
-          importPlaceholderRow_('Workout History CSV', 'Existing runs, walks, rides, lifts, etc. for analytics'),
-        ]),
+          "Coming next: Lift Session History CSV, Pull-Ups History CSV, and Training Plan CSV upload."),
       ]));
       app.appendChild(importWrap);
     }
 
-    // Small helper for the Import section — one row per upload type.
-    function importPlaceholderRow_(title, subtitle) {
-      return el('div', {
-        style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);',
-      }, [
-        el('div', { style: 'flex: 1;' }, [
-          el('div', { style: 'font-weight: 600; font-size: 13px;' }, title),
-          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px; line-height: 1.4;' }, subtitle),
+    // Program CSV upload card. File picker + name + optional day titles +
+    // template download. On success, re-renders Programs to show the new
+    // row in the My Plans list.
+    function importProgramCard_() {
+      const nameInp = el('input', {
+        type: 'text', placeholder: 'e.g. Push/Pull Hypertrophy 2026',
+        style: 'width: 100%; margin: 0 0 10px;',
+      });
+      const dayTitlesInp = el('input', {
+        type: 'text', placeholder: 'e.g. A=Push,B=Pull,C=Legs (optional)',
+        style: 'width: 100%; margin: 0 0 10px;',
+      });
+      const notesInp = el('input', {
+        type: 'text', placeholder: 'Notes (optional)',
+        style: 'width: 100%; margin: 0 0 10px;',
+      });
+      const fileInp = el('input', {
+        type: 'file', accept: '.csv,text/csv',
+        style: 'width: 100%; margin: 0 0 10px; font-size: 13px;',
+      });
+      const status = el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px; min-height: 16px;' }, '');
+
+      const uploadBtn = el('button', {
+        style: 'flex: 1;',
+        onclick: async () => {
+          const name = (nameInp.value || '').trim();
+          if (!name) return toast('Give your program a name first.', true);
+          const file = fileInp.files && fileInp.files[0];
+          if (!file) return toast('Choose a CSV file first.', true);
+
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Importing…';
+          status.textContent = 'Parsing CSV…';
+          try {
+            const parsed = await parseCsvFile_(file);
+            if (parsed.errors && parsed.errors.length) {
+              const first = parsed.errors[0];
+              throw new Error(`CSV parse error (row ${first.row}): ${first.message}`);
+            }
+            const structure = programStructureFromRows_(parsed.data, dayTitlesInp.value.trim());
+            status.textContent = 'Uploading…';
+            const result = await sbUpsertProgramFromCsv(name, structure, notesInp.value.trim() || null);
+            const exCount = structure.weeks.reduce((sum, w) =>
+              sum + Object.values(w.days || {}).reduce((s, arr) => s + arr.length, 0), 0);
+            toast(`${result.updated ? 'Updated' : 'Imported'} "${name}" — ${structure.weeks_total} weeks · ${exCount} exercises`);
+            setTimeout(() => render('programs'), 700);
+          } catch (e) {
+            status.textContent = 'Failed: ' + (e.message || String(e));
+            toast('Import failed: ' + (e.message || String(e)), true);
+          } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Import program';
+          }
+        },
+      }, 'Import program');
+
+      const templateBtn = el('button', {
+        style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+        onclick: () => {
+          downloadFile_('program-template.csv', PROGRAM_CSV_TEMPLATE, 'text/csv');
+          toast('Template downloaded');
+        },
+      }, 'Download template');
+
+      return el('div', { class: 'card' }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 14px;' }, 'Program CSV'),
         ]),
-        el('span', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; white-space: nowrap;' }, 'Soon'),
+        el('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 12px; line-height: 1.4;' },
+          'Reusable lift templates. One row per exercise per week per day. Re-importing with the same name updates the existing program.'),
+        nameInp,
+        dayTitlesInp,
+        notesInp,
+        fileInp,
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 4px;' }, [templateBtn, uploadBtn]),
+        status,
+      ]);
+    }
+
+    // Cardio history CSV upload card. Single CSV with a Type column;
+    // bulk-inserts to runs / walks / activities tables.
+    function importHistoryCard_() {
+      const fileInp = el('input', {
+        type: 'file', accept: '.csv,text/csv',
+        style: 'width: 100%; margin: 0 0 10px; font-size: 13px;',
+      });
+      const status = el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 6px; min-height: 16px;' }, '');
+
+      const uploadBtn = el('button', {
+        style: 'flex: 1;',
+        onclick: async () => {
+          const file = fileInp.files && fileInp.files[0];
+          if (!file) return toast('Choose a CSV file first.', true);
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Importing…';
+          status.textContent = 'Parsing CSV…';
+          try {
+            const parsed = await parseCsvFile_(file);
+            if (parsed.errors && parsed.errors.length) {
+              const first = parsed.errors[0];
+              throw new Error(`CSV parse error (row ${first.row}): ${first.message}`);
+            }
+            status.textContent = 'Uploading…';
+            const result = await sbBulkInsertCardioHistory(parsed.data);
+            const total = result.runs + result.walks + result.activities;
+            let msg = `Imported ${total} sessions (${result.runs} runs, ${result.walks} walks, ${result.activities} activities)`;
+            if (result.skipped) msg += ` · ${result.skipped} skipped`;
+            toast(msg);
+            status.textContent = msg;
+            fileInp.value = '';
+          } catch (e) {
+            status.textContent = 'Failed: ' + (e.message || String(e));
+            toast('Import failed: ' + (e.message || String(e)), true);
+          } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Import history';
+          }
+        },
+      }, 'Import history');
+
+      const templateBtn = el('button', {
+        style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+        onclick: () => {
+          downloadFile_('workout-history-template.csv', HISTORY_CSV_TEMPLATE, 'text/csv');
+          toast('Template downloaded');
+        },
+      }, 'Download template');
+
+      return el('div', { class: 'card' }, [
+        el('div', { style: 'font-weight: 600; font-size: 14px; margin-bottom: 4px;' }, 'Workout History CSV'),
+        el('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 12px; line-height: 1.4;' },
+          'Bulk import past runs, walks, rides, hikes, swims, etc. One row per session with a Type column. Analytics reads this data as if you\'d logged it in-app.'),
+        fileInp,
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 4px;' }, [templateBtn, uploadBtn]),
+        status,
       ]);
     }
 
@@ -7743,6 +8261,20 @@
             render('feedback');
           },
         }, 'Send feedback'),
+      ]));
+
+      // Preferences
+      app.appendChild(el('div', {
+        class: 'card',
+        style: 'cursor: pointer; margin-top: 4px;',
+        onclick: () => render('dot-colors'),
+      }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('h2', { style: 'margin: 0;' }, 'Calendar colors'),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; line-height: 1.4;' },
+          'Customize which color represents each modality on the calendar. Saves to this device.'),
       ]));
 
       // Account / sign out
