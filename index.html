@@ -1051,9 +1051,11 @@
       justify-content: flex-end;
     }
     .cal-dot { width: 5px; height: 5px; border-radius: 50%; }
-    .cal-dot.lift { background: #ff6b35; }
-    .cal-dot.run  { background: #7ab7ff; }
-    .cal-dot.pull { background: #7affb7; }
+    .cal-dot.lift     { background: #ff6b35; }
+    .cal-dot.run      { background: #7ab7ff; }
+    .cal-dot.walk     { background: #7ade95; }
+    .cal-dot.pull     { background: #7affb7; }
+    .cal-dot.activity { background: #b47aff; }
 
     .cal-detail {
       margin-top: 12px;
@@ -1630,7 +1632,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v20';
+    const APP_VERSION = 'v26.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2673,11 +2675,11 @@
       try {
         const uid = currentUser.id;
         const [liftsR, runsR, walksR, pullsR, actsR] = await Promise.all([
-          _sb.from('lift_sessions').select('date,block_name,day,exercises').eq('user_id', uid).order('date', { ascending: false }).limit(5),
-          _sb.from('runs').select('date,distance,duration_secs,pace').eq('user_id', uid).order('date', { ascending: false }).limit(5),
-          _sb.from('walks').select('date,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
-          _sb.from('pullup_sessions').select('date,total_reps').eq('user_id', uid).order('date', { ascending: false }).limit(5),
-          _sb.from('activities').select('date,activity_type,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('lift_sessions').select('id,date,block_name,week,day,exercises').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('runs').select('id,date,distance,duration_secs,pace').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('walks').select('id,date,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('pullup_sessions').select('id,date,total_reps').eq('user_id', uid).order('date', { ascending: false }).limit(5),
+          _sb.from('activities').select('id,date,activity_type,distance,duration_secs').eq('user_id', uid).order('date', { ascending: false }).limit(5),
         ]);
         const rows = [];
         (liftsR.data || []).forEach(s => rows.push(normalizeLiftRow_(s)));
@@ -3859,15 +3861,19 @@
       const todayISOStr = todayISO();
       data.days.forEach(day => {
         const hasLift = !!day.lift;
-        const hasRun = !!day.run;
+        const hasRun  = !!day.run;
         const hasPull = !!day.pullups;
-        const hasAny = hasLift || hasRun || hasPull;
+        const hasWalk = !!day.walk;
+        const hasActivity = Array.isArray(day.activities) && day.activities.length > 0;
+        const hasAny = hasLift || hasRun || hasPull || hasWalk || hasActivity;
         const isToday = day.date === todayISOStr;
         const cls = 'cal-day' + (hasAny ? ' has-activity' : '') + (isToday ? ' today' : '');
         const dots = [];
-        if (hasLift) dots.push(el('div', { class: 'cal-dot lift' }));
-        if (hasRun) dots.push(el('div', { class: 'cal-dot run' }));
-        if (hasPull) dots.push(el('div', { class: 'cal-dot pull' }));
+        if (hasLift)     dots.push(el('div', { class: 'cal-dot lift' }));
+        if (hasRun)      dots.push(el('div', { class: 'cal-dot run' }));
+        if (hasWalk)     dots.push(el('div', { class: 'cal-dot walk' }));
+        if (hasActivity) dots.push(el('div', { class: 'cal-dot activity' }));
+        if (hasPull)     dots.push(el('div', { class: 'cal-dot pull' }));
         grid.appendChild(el('button', {
           class: cls,
           'data-date': day.date,
@@ -3885,10 +3891,12 @@
 
       // Legend
       gridContainer.appendChild(el('div', { class: 'card', style: 'margin-top: 12px; font-size: 12px; padding: 10px 14px;' }, [
-        el('div', { style: 'display: flex; gap: 16px; flex-wrap: wrap;' }, [
-          el('span', {}, [el('span', { class: 'cal-dot lift', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Lift']),
-          el('span', {}, [el('span', { class: 'cal-dot run', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Run']),
-          el('span', {}, [el('span', { class: 'cal-dot pull', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Pull-Ups']),
+        el('div', { style: 'display: flex; gap: 12px; flex-wrap: wrap;' }, [
+          el('span', {}, [el('span', { class: 'cal-dot lift',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Lift']),
+          el('span', {}, [el('span', { class: 'cal-dot run',      style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Run']),
+          el('span', {}, [el('span', { class: 'cal-dot walk',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Walk']),
+          el('span', {}, [el('span', { class: 'cal-dot activity', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Ride/Hike/etc.']),
+          el('span', {}, [el('span', { class: 'cal-dot pull',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Pull-Ups']),
         ]),
       ]));
     }
@@ -3904,19 +3912,19 @@
         const uid = currentUser.id;
         const [liftsR, runsR, walksR, pullsR, actsR] = await Promise.all([
           _sb.from('lift_sessions')
-            .select('date,block_name,week,day,exercises,notes')
+            .select('id,date,block_name,week,day,exercises,notes')
             .eq('user_id', uid).order('date', { ascending: false }).limit(200),
           _sb.from('runs')
-            .select('date,distance,duration_secs,pace,notes,shoe_id')
+            .select('id,date,distance,duration_secs,pace,notes,shoe_id')
             .eq('user_id', uid).order('date', { ascending: false }).limit(200),
           _sb.from('walks')
-            .select('date,distance,duration_secs,notes')
+            .select('id,date,distance,duration_secs,notes')
             .eq('user_id', uid).order('date', { ascending: false }).limit(200),
           _sb.from('pullup_sessions')
-            .select('date,sets,total_reps,notes')
+            .select('id,date,sets,total_reps,notes')
             .eq('user_id', uid).order('date', { ascending: false }).limit(200),
           _sb.from('activities')
-            .select('date,activity_type,duration_secs,distance,intensity,notes')
+            .select('id,date,activity_type,duration_secs,distance,intensity,notes')
             .eq('user_id', uid).order('date', { ascending: false }).limit(200),
         ]);
 
@@ -3979,12 +3987,19 @@
         tot + [ex.r1, ex.r2, ex.r3, ex.r4].reduce((sum, v) => sum + (Number(v) || 0), 0), 0);
       const preview = exArr.slice(0, 3).map(ex => ex.name).join(' · ') +
                       (exArr.length > 3 ? ` · +${exArr.length - 3} more` : '');
+      // Build a clean primary line: only join the pieces that exist.
+      // Plan-based sessions often have no block_name and stash the full
+      // session label in `day` ("Lift A - Push Strength").
+      const bits = [];
+      if (s.block_name) bits.push(s.block_name);
+      if (s.week)       bits.push(`Wk ${s.week}`);
+      if (s.day)        bits.push(s.day);
       return {
         date: s.date,
         kind: 'lift',
         tag: 'LIFT',
         tagColor: 'lift',
-        primary: `${s.block_name || '—'} · Day ${s.day || '—'}${s.week ? ' · Wk ' + s.week : ''}`,
+        primary: bits.join(' · ') || 'Lift session',
         subtitle: preview,
         right: `${exCount} ex · ${totalReps} reps`,
         onClick: () => {
@@ -4006,7 +4021,7 @@
         primary: [dist ? `${dist} mi` : '', time].filter(Boolean).join(' · '),
         subtitle: [r.pace ? `${r.pace}/mi` : '', r.notes].filter(Boolean).join(' · '),
         right: '',
-        onClick: null,
+        onClick: r.id ? () => { _runEditRef = { id: r.id }; render('run-edit'); } : null,
       };
     }
 
@@ -4022,7 +4037,7 @@
         primary: [dist ? `${dist} mi` : '', time].filter(Boolean).join(' · '),
         subtitle: w.notes || '',
         right: '',
-        onClick: null,
+        onClick: w.id ? () => { _walkEditRef = { id: w.id }; render('walk-edit'); } : null,
       };
     }
 
@@ -4036,7 +4051,7 @@
         primary: `${p.total_reps || 0} reps`,
         subtitle: setsArr.length ? setsArr.join(' / ') : (p.notes || ''),
         right: '',
-        onClick: null,
+        onClick: p.id ? () => { _pullupsEditRef = { id: p.id }; render('pullups-edit'); } : null,
       };
     }
 
@@ -4060,7 +4075,7 @@
         primary: parts.join(' · ') || '—',
         subtitle: [a.intensity, a.notes].filter(Boolean).join(' · '),
         right: '',
-        onClick: null,
+        onClick: a.id ? () => { _activityEditRef = { id: a.id }; render('activity-edit'); } : null,
       };
     }
 
@@ -4098,10 +4113,17 @@
       ]);
       const items = [];
       if (day.lift) {
-        const liftDesc = `${day.lift.block || ''} · Week ${day.lift.week || ''} · Day ${day.lift.day || ''}`.trim();
+        // Clean description: only include the pieces that are actually set.
+        // Plan-based sessions often don't have block/week; they store the
+        // full session name in `day`.
+        const bits = [];
+        if (day.lift.block) bits.push(day.lift.block);
+        if (day.lift.week)  bits.push(`Week ${day.lift.week}`);
+        if (day.lift.day)   bits.push(day.lift.day);
+        const liftDesc = bits.join(' · ');
         items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
           el('div', { style: 'font-weight: 600; color: #ff9b7a;' }, 'Lift'),
-          el('div', { class: 'muted', style: 'font-size: 13px;' }, liftDesc),
+          liftDesc ? el('div', { class: 'muted', style: 'font-size: 13px;' }, liftDesc) : null,
           el('button', {
             style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
             onclick: () => {
