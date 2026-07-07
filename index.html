@@ -1632,7 +1632,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v27.1';
+    const APP_VERSION = 'v28.a';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2838,6 +2838,8 @@
           el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
             shownDay.week ? `Week ${shownDay.week}` : ''),
           el('div', { style: 'margin-top: 8px; font-size: 15px; font-weight: 600;' }, summary || '—'),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 8px; text-align: right;' },
+            'View full plan →'),
         ]);
         app.appendChild(card);
       } catch (e) { /* silent */ }
@@ -4755,11 +4757,17 @@
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
       app.appendChild(skel);
 
-      let programs;
-      try { programs = await sbListPrograms(); }
-      catch (e) {
+      // Fetch both concurrently — training plans and programs are separate
+      // tables today, but for the user this is all "my workout stuff."
+      let programs, plan;
+      try {
+        [programs, plan] = await Promise.all([
+          sbListPrograms(),
+          sbActiveTrainingPlan().catch(() => null),
+        ]);
+      } catch (e) {
         skel.remove();
-        app.appendChild(el('div', { class: 'card' }, 'Could not load programs: ' + e.message));
+        app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
         return;
       }
       skel.remove();
@@ -4771,25 +4779,50 @@
         return;
       }
 
+      // --- Active training plan banner (top billing) ---
+      // The imported hybrid Strength+Run plan lives in training_plans, not
+      // programs, so surface it here as a first-class entry point so users
+      // don't lose track of it.
+      if (plan) {
+        const s = plan.structure || {};
+        const cfg = s.config || {};
+        const startDate = cfg.start_date || plan.start_date;
+        const endDate   = cfg.end_date   || plan.end_date;
+        const totalWeeks = cfg.total_weeks || '';
+        app.appendChild(el('div', {
+          class: 'card',
+          style: 'cursor: pointer;',
+          onclick: () => render('training-plan'),
+        }, [
+          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+            el('h2', { style: 'margin: 0;' }, 'Active training plan'),
+            el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Tap to view →'),
+          ]),
+          el('div', { style: 'font-size: 16px; font-weight: 600; margin-top: 8px;' }, plan.name),
+          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' },
+            `${startDate} → ${endDate}${totalWeeks ? ' · ' + totalWeeks + ' weeks' : ''}`),
+        ]));
+      }
+
       // List view
       const active = programs.filter(p => p.active && !p.archived);
       const upcoming = programs.filter(p => !p.active && !p.archived);
       const archived = programs.filter(p => p.archived);
 
-      if (!programs.length) {
+      if (!programs.length && !plan) {
         app.appendChild(el('div', { class: 'card' }, [
-          el('h2', {}, 'No programs yet'),
-          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px;' },
-            'Create a program by running import_program.py with a CSV. The exercise list it imports is what the Lift logger will show.'),
+          el('h2', {}, 'No programs or plans yet'),
+          el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
+            "Programs are reusable lift templates (e.g. Push/Pull, 5/3/1). Training plans are date-anchored schedules that tell you what to do on each specific day."),
           el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px;' },
-            'See PROGRAMS_README.md in the Running Plans folder for the CSV format.'),
+            'Uploading your own program or plan from a CSV is coming in the next update.'),
         ]));
         return;
       }
 
       if (active.length) {
         const wrap = el('div');
-        wrap.appendChild(el('h2', { class: 'section-h' }, 'Active'));
+        wrap.appendChild(el('h2', { class: 'section-h' }, 'Active program'));
         active.forEach(p => wrap.appendChild(programCard_(p)));
         app.appendChild(wrap);
       }
@@ -4805,16 +4838,6 @@
         archived.forEach(p => wrap.appendChild(programCard_(p)));
         app.appendChild(wrap);
       }
-
-      app.appendChild(el('div', { class: 'card', style: 'margin-top: 10px;' }, [
-        el('h2', {}, 'Add a new program'),
-        el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
-          'Build a CSV with one row per exercise per week per day, then run:'),
-        el('pre', { style: 'background: var(--surface-2); padding: 10px; border-radius: 8px; font-size: 12px; overflow-x: auto; margin-top: 8px;' },
-          'python3 import_program.py "my-program.csv" \\\n  --name "My Program Name" \\\n  --day-titles "A=Push,B=Pull,C=Legs"'),
-        el('p', { class: 'muted', style: 'font-size: 12px; margin-top: 8px;' },
-          'Tap an Available program below and hit Activate to start using it. The Lift logger will read its templates instead of the previous active program.'),
-      ]));
     }
 
     function programCard_(p) {
