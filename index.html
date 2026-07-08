@@ -6,11 +6,16 @@
   <meta name="theme-color" content="#0a0a0a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Workouts" />
+  <meta name="apple-mobile-web-app-title" content="Loggbok" />
+  <meta name="description" content="Your canonical training record. Multi-modal logging for runs, lifts, walks, rides, hikes, swims, and everything in between." />
+  <meta property="og:title" content="Loggbok" />
+  <meta property="og:description" content="Your canonical training record." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://loggbok.co" />
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icon-180.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
-  <title>Workouts</title>
+  <title>Loggbok</title>
   <style>
     :root {
       --bg: #0a0a0a;
@@ -1639,7 +1644,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v29';
+    const APP_VERSION = 'v30';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3073,8 +3078,8 @@
       document.querySelectorAll('nav.bottom button').forEach(b => b.classList.remove('active'));
       const wrap = el('div', { class: 'auth-wrap' }, [
         el('div', { class: 'auth-logo' }, '🏃'),
-        el('h1', { class: 'auth-title' }, 'Workouts'),
-        el('p', { class: 'auth-sub' }, 'Sign in to track your training'),
+        el('h1', { class: 'auth-title' }, 'Loggbok'),
+        el('p', { class: 'auth-sub' }, 'Your training record. Sign in to continue.'),
         el('div', { class: 'auth-card', id: 'auth-card' }, [
           el('input', { type: 'email', id: 'auth-email', placeholder: 'your@email.com', autocomplete: 'email' }),
           el('button', { class: 'btn', id: 'auth-send-btn', onclick: authSendCode }, 'Send code'),

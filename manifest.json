@@ -1,7 +1,7 @@
 {
-  "name": "Workouts",
-  "short_name": "Workouts",
-  "description": "Jeff's lift + run tracker",
+  "name": "Loggbok",
+  "short_name": "Loggbok",
+  "description": "Your canonical training record. Multi-modal logging for runs, lifts, walks, rides, hikes, swims, and everything in between.",
   "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
