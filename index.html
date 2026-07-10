@@ -1616,7 +1616,7 @@
       const uid = currentUser.id;
       const { data, error } = await _sb
         .from('programs')
-        .select('id,name,notes,active,archived_at,structure,created_at')
+        .select('id,name,notes,active,archived_at,structure,plan_type,created_at')
         .eq('user_id', uid)
         .order('active', { ascending: false })
         .order('archived_at', { ascending: true, nullsFirst: true })
@@ -1631,7 +1631,80 @@
         archivedAt: p.archived_at,
         createdAt: p.created_at,
         structure: p.structure,
+        plan_type: p.plan_type || 'lift',
       }));
+    }
+
+    // --- v32.3 Multi-active plan helpers ---
+    // A plan/program's plan_type determines what can coexist:
+    //   'run' | 'lift' | 'cycle' — specific modality; can coexist with any
+    //     OTHER specific modality (a run plan + a lift program is fine).
+    //   'general' — multi-modal / hybrid; activating one deactivates every
+    //     other active row across both training_plans + programs.
+    // Same-type CANNOT coexist (one run plan at a time).
+
+    // Return the set of plan_types that MUST be deactivated when the given
+    // activating type comes online. `general` displaces everything;
+    // specific types displace themselves + general.
+    function typesToDeactivateFor_(activatingType) {
+      if (activatingType === 'general') return ['run', 'lift', 'cycle', 'general'];
+      return [activatingType, 'general'];
+    }
+
+    // Runs the deactivation across both tables. Skips the row being
+    // activated (identified by exceptId + exceptTable).
+    async function deactivateConflictingActives_(activatingType, exceptId, exceptTable) {
+      const uid = currentUser.id;
+      const types = typesToDeactivateFor_(activatingType);
+      const runQuery = async (table) => {
+        let q = _sb.from(table).update({ active: false })
+          .eq('user_id', uid).eq('active', true).is('archived_at', null)
+          .in('plan_type', types);
+        if (exceptTable === table && exceptId) q = q.neq('id', exceptId);
+        const { error } = await q;
+        if (error) throw new Error(error.message);
+      };
+      await runQuery('training_plans');
+      await runQuery('programs');
+      invalidateActiveTrainingPlanCache();
+      invalidateActiveProgramCache();
+    }
+
+    // Fetch every active row across both tables. Returns a list of
+    // { source, id, name, plan_type, structure, ... } for display.
+    async function sbListActiveWorkoutItems() {
+      const uid = currentUser.id;
+      const [tp, pr] = await Promise.all([
+        _sb.from('training_plans')
+          .select('id,name,plan_type,start_date,end_date,structure,notes')
+          .eq('user_id', uid).eq('active', true).is('archived_at', null),
+        _sb.from('programs')
+          .select('id,name,plan_type,structure,notes')
+          .eq('user_id', uid).eq('active', true).is('archived_at', null),
+      ]);
+      if (tp.error) throw new Error(tp.error.message);
+      if (pr.error) throw new Error(pr.error.message);
+      const items = [];
+      (tp.data || []).forEach(p => items.push({ ...p, source: 'training_plan' }));
+      (pr.data || []).forEach(p => items.push({ ...p, source: 'program' }));
+      return items;
+    }
+
+    // Compute the list of currently-active rows that would be deactivated
+    // if we activated a row of the given type. Used to build the confirm
+    // prompt so users know exactly what's being displaced.
+    async function conflictingActivesFor_(activatingType, exceptId, exceptTable) {
+      const items = await sbListActiveWorkoutItems();
+      const types = typesToDeactivateFor_(activatingType);
+      return items.filter(it => {
+        if (!types.includes(it.plan_type || 'lift')) return false;
+        if (it.source === exceptTable && it.id === exceptId) return false;
+        // Programs table uses source 'program'; be forgiving on the
+        // check by normalizing.
+        if (exceptTable === 'programs' && it.source === 'program' && it.id === exceptId) return false;
+        if (exceptTable === 'training_plans' && it.source === 'training_plan' && it.id === exceptId) return false;
+        return true;
+      });
     }
 
     async function sbGetProgram(id) {
@@ -1642,15 +1715,17 @@
     }
 
     async function sbActivateProgram(id) {
-      const uid = currentUser.id;
-      // Step 1: deactivate everything else first
-      const r1 = await _sb.from('programs').update({ active: false })
-        .eq('user_id', uid).neq('id', id);
-      if (r1.error) throw new Error(r1.error.message);
-      // Step 2: activate this one (and un-archive if archived)
-      const r2 = await _sb.from('programs').update({ active: true, archived_at: null })
+      // Fetch this program's plan_type so we know what to deactivate.
+      const { data: p, error: gErr } = await _sb.from('programs')
+        .select('plan_type').eq('id', id).maybeSingle();
+      if (gErr) throw new Error(gErr.message);
+      const type = (p && p.plan_type) || 'lift';
+      // v32.3: type-aware deactivation across both tables.
+      await deactivateConflictingActives_(type, id, 'programs');
+      // Activate this one (and un-archive if archived)
+      const { error } = await _sb.from('programs').update({ active: true, archived_at: null })
         .eq('id', id);
-      if (r2.error) throw new Error(r2.error.message);
+      if (error) throw new Error(error.message);
       return { ok: true };
     }
 
@@ -1722,7 +1797,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.2.1';
+    const APP_VERSION = 'v32.3';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3587,42 +3662,57 @@
 
     async function widgetTodaysWorkout_({ app }) {
       try {
-        const plan = await sbActiveTrainingPlan();
-        if (!plan) return; // silent when no plan active
+        // v32.3: iterate over ALL active training plans, not just one.
+        const items = await sbListActiveWorkoutItems();
+        const plans = items.filter(it => it.source === 'training_plan');
+        if (!plans.length) return; // silent when no plans
+
         const today = todayISO();
-        const day = findPlanDay_(plan, today);
-        const next = day ? null : firstUpcomingPlanDay_(plan, today);
-        if (!day && !next) return; // plan ended or hasn't started
-        const shownDay = day || next;
-        const isToday = shownDay.date === today;
-        const wd = new Date(shownDay.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-
-        // Summarize sessions in one line
-        const summary = (shownDay.sessions || []).map(s => {
-          if (s.type === 'lift') return s.name;
-          if (s.type === 'run') {
-            const bits = [s.name];
-            if (s.target_miles) bits.push(`${s.target_miles} mi`);
-            return bits.join(' · ');
+        // Collect "what's on for today or next" per plan.
+        const perPlan = [];
+        plans.forEach(plan => {
+          const day = findPlanDay_(plan, today);
+          const next = day ? null : firstUpcomingPlanDay_(plan, today);
+          if (day || next) {
+            perPlan.push({ plan, shownDay: day || next, isToday: !!day });
           }
-          return s.name || '';
-        }).join(' + ');
+        });
+        if (!perPlan.length) return;
 
-        const card = el('div', {
-          class: 'card',
-          onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
-          style: 'cursor: pointer;',
-        }, [
-          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
-            el('h2', { style: 'margin: 0;' }, isToday ? "Today's workout" : 'Next workout'),
-            el('span', { class: 'muted', style: 'font-size: 12px;' }, isToday ? '' : wd),
-          ]),
-          el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
-            shownDay.week ? `Week ${shownDay.week}` : ''),
-          el('div', { style: 'margin-top: 8px; font-size: 15px; font-weight: 600;' }, summary || '—'),
-          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 8px; text-align: right;' },
-            'View full plan →'),
-        ]);
+        const anyToday = perPlan.some(x => x.isToday);
+        const card = el('div', { class: 'card' });
+        card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('h2', { style: 'margin: 0;' }, anyToday ? "Today's workout" : 'Next workout'),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, ''),
+        ]));
+
+        perPlan.forEach(({ plan, shownDay, isToday }, i) => {
+          const wd = new Date(shownDay.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          const summary = (shownDay.sessions || []).map(s => {
+            if (s.type === 'lift') return s.name;
+            if (s.type === 'run') {
+              const bits = [s.name];
+              if (s.target_miles) bits.push(`${s.target_miles} mi`);
+              return bits.join(' · ');
+            }
+            return s.name || '';
+          }).join(' + ');
+          const typeLabel = (plan.plan_type || 'general').toUpperCase();
+          const row = el('div', {
+            style: 'padding: 10px 0; border-top: 1px solid var(--border); cursor: pointer;'
+                 + (i === 0 ? ' border-top-color: transparent; padding-top: 0;' : ''),
+            onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
+          }, [
+            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
+              `${typeLabel} · ${plan.name}${isToday ? '' : ' · ' + wd}`),
+            el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' }, summary || '—'),
+            shownDay.week ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, `Week ${shownDay.week}`) : null,
+          ]);
+          card.appendChild(row);
+        });
+
+        card.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px; text-align: right;' },
+          'Tap a row to open the plan →'));
         app.appendChild(card);
       } catch (e) { /* silent */ }
     }
@@ -5820,11 +5910,14 @@
       }
       skel.remove();
 
-      // Split training plans by state
-      const activePlan     = allPlans.find(p => p.active && !p.archived_at) || null;
+      // Split training plans by state. v32.3: multiple plans may be
+      // active simultaneously (different plan_types can coexist).
+      const activePlans    = allPlans.filter(p => p.active && !p.archived_at);
       const availablePlans = allPlans.filter(p => !p.active && !p.archived_at);
       const archivedPlans  = allPlans.filter(p => !!p.archived_at);
-      const plan = activePlan; // keep the variable name from the older code path
+      // For backward-compat with any inline reference to `plan` further
+      // down in this function, keep the first-active as a scalar.
+      const plan = activePlans[0] || null;
 
       if (_programsDetailId) {
         const prog = programs.find(p => p.id === _programsDetailId);
@@ -5838,7 +5931,7 @@
       const upcoming = programs.filter(p => !p.active && !p.archived);
       const archived = programs.filter(p => p.archived);
 
-      const hasAnyMine = !!plan || active.length || upcoming.length || archived.length
+      const hasAnyMine = activePlans.length || active.length || upcoming.length || archived.length
                        || availablePlans.length || archivedPlans.length;
 
       // --- My plans ---
@@ -5850,12 +5943,18 @@
         const mineWrap = el('div');
         mineWrap.appendChild(el('h2', { class: 'section-h' }, 'My plans'));
 
-        // Active — training plan first (only one can be active at a time),
-        // then active program.
-        if (plan || active.length) {
+        // Active — v32.3: multiple actives can coexist (one per modality
+        // OR a single 'general' plan). Sort by plan_type so run/lift/cycle
+        // read consistently.
+        if (activePlans.length || active.length) {
           mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Active'));
-          if (plan) mineWrap.appendChild(planCard_(plan));
-          active.forEach(p => mineWrap.appendChild(programCard_(p)));
+          const typeOrder = { run: 0, lift: 1, cycle: 2, general: 3 };
+          activePlans.slice().sort((a, b) =>
+            (typeOrder[a.plan_type || 'general'] ?? 9) - (typeOrder[b.plan_type || 'general'] ?? 9)
+          ).forEach(pl => mineWrap.appendChild(planCard_(pl)));
+          active.slice().sort((a, b) =>
+            (typeOrder[a.plan_type || 'lift'] ?? 9) - (typeOrder[b.plan_type || 'lift'] ?? 9)
+          ).forEach(p => mineWrap.appendChild(programCard_(p)));
         }
 
         if (upcoming.length || availablePlans.length) {
@@ -6081,13 +6180,15 @@
         exCount ? `${exCount} exercises` : '',
       ].filter(Boolean).join(' · ');
 
+      const typeLabels = { run: 'RUN', lift: 'LIFT', cycle: 'CYCLE', general: 'GENERAL' };
+      const typeLabel  = typeLabels[p.plan_type] || 'LIFT';
       return el('div', { class: 'card program-card', onclick: () => {
         _programsDetailId = p.id;
         render('programs');
       }}, [
         el('div', { class: 'program-row' }, [
           el('div', {}, [
-            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, 'PROGRAM'),
+            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, `${typeLabel} · PROGRAM`),
             el('div', { class: 'program-name' }, p.name),
             el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
             p.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, p.notes) : null,
@@ -6120,13 +6221,15 @@
       const onClickHandler = plan.active
         ? () => render('training-plan')
         : () => { _trainingPlanDetailId = plan.id; render('training-plan-detail'); };
+      const typeLabels = { run: 'RUN', lift: 'LIFT', cycle: 'CYCLE', general: 'GENERAL' };
+      const typeLabel  = typeLabels[plan.plan_type] || 'GENERAL';
       return el('div', {
         class: 'card program-card',
         onclick: onClickHandler,
       }, [
         el('div', { class: 'program-row' }, [
           el('div', {}, [
-            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, 'TRAINING PLAN'),
+            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 4px;' }, `${typeLabel} · TRAINING PLAN`),
             el('div', { class: 'program-name' }, plan.name),
             el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
             plan.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, plan.notes) : null,
@@ -6170,28 +6273,15 @@
           !p.active ? el('button', {
             onclick: async () => {
               try {
-                // Look up whatever is currently active so we can prompt
-                // the user before silently deactivating it.
-                const [curPlan, curProg] = await Promise.all([
-                  sbActiveTrainingPlan(true).catch(() => null),
-                  sbActiveProgram(true).catch(() => null),
-                ]);
-                const displaces = [];
-                if (curPlan) displaces.push(`training plan "${curPlan.name}"`);
-                if (curProg && curProg.id !== p.id) displaces.push(`program "${curProg.name}"`);
-                if (displaces.length) {
-                  const msg = `Activate "${p.name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime.`;
+                // v32.3: type-aware — only show what actually conflicts.
+                const type = p.plan_type || 'lift';
+                const conflicts = await conflictingActivesFor_(type, p.id, 'programs');
+                if (conflicts.length) {
+                  const names = conflicts.map(c => `"${c.name}"`).join(', ');
+                  const msg = `Activate "${p.name}"?\n\nThis will deactivate ${names} because ${conflicts.length === 1 ? 'it conflicts' : 'they conflict'} with this ${type === 'general' ? 'plan' : type + ' program'}. You can reactivate ${conflicts.length === 1 ? 'it' : 'them'} anytime.`;
                   if (!confirm(msg)) return;
-                  // sbActivateProgram deactivates other programs itself;
-                  // we handle deactivating the training plan here.
-                  if (curPlan) {
-                    await _sb.from('training_plans').update({ active: false })
-                      .eq('id', curPlan.id);
-                    invalidateActiveTrainingPlanCache();
-                  }
                 }
                 await sbActivateProgram(p.id);
-                invalidateActiveProgramCache();
                 toast('Activated');
                 render('programs');
               } catch (e) { toast('Could not activate: ' + e.message, true); }
@@ -6570,10 +6660,13 @@
       invalidateActiveTrainingPlanCache();
     }
     async function sbActivateTrainingPlan(id) {
-      // Deactivate any currently active plan first.
-      const uid = currentUser.id;
-      await _sb.from('training_plans').update({ active: false })
-        .eq('user_id', uid).eq('active', true).is('archived_at', null);
+      // Fetch this plan's plan_type so we know what to deactivate.
+      const { data: p, error: gErr } = await _sb.from('training_plans')
+        .select('plan_type').eq('id', id).maybeSingle();
+      if (gErr) throw new Error(gErr.message);
+      const type = (p && p.plan_type) || 'general';
+      // v32.3: type-aware deactivation across both tables.
+      await deactivateConflictingActives_(type, id, 'training_plans');
       // Then activate this one and clear its archived_at.
       const { error } = await _sb.from('training_plans')
         .update({ active: true, archived_at: null })
@@ -6588,35 +6681,33 @@
     }
 
     // Save a training plan generated from a builder (Run Planner, etc.).
-    // Returns { id, displacedName }. If activate=true, deactivates any
-    // currently-active plan first and reports its name in displacedName so
-    // the caller can toast a helpful message.
-    async function sbSaveTrainingPlan({ name, structure, notes, activate }) {
+    // Returns { id, displacedNames[] }. If activate=true, deactivates any
+    // conflicting-type actives first (v32.3 rules) and reports their names.
+    async function sbSaveTrainingPlan({ name, structure, notes, activate, planType }) {
       const uid = currentUser.id;
-      let displacedName = null;
+      const type = planType || 'general';
+      let displacedNames = [];
       if (activate) {
-        const { data: cur } = await _sb.from('training_plans')
-          .select('id,name').eq('user_id', uid).eq('active', true)
-          .is('archived_at', null).maybeSingle();
-        if (cur) {
-          displacedName = cur.name;
-          await _sb.from('training_plans').update({ active: false })
-            .eq('user_id', uid).eq('active', true).is('archived_at', null);
-        }
+        // Look up what would be displaced BEFORE we insert.
+        const conflicts = await conflictingActivesFor_(type, null, 'training_plans')
+          .catch(() => []);
+        displacedNames = conflicts.map(c => c.name);
+        await deactivateConflictingActives_(type, null, 'training_plans');
       }
       const cfg = structure.config || {};
       const { data, error } = await _sb.from('training_plans').insert({
-        user_id: uid,
+        user_id:    uid,
         name,
         start_date: cfg.start_date,
         end_date:   cfg.end_date,
         active:     !!activate,
         structure,
         notes:      notes || null,
+        plan_type:  type,
       }).select('id').single();
       if (error) throw new Error(error.message);
       invalidateActiveTrainingPlanCache();
-      return { id: data.id, displacedName };
+      return { id: data.id, displacedNames };
     }
 
     // Convert a Run Planner in-memory state (from planGenerate) to the
@@ -6758,24 +6849,16 @@
             style: 'flex: 1;',
             onclick: async () => {
               try {
-                // Confirm-when-displacing (same pattern as Programs).
-                const [curPlan, curProg] = await Promise.all([
-                  sbActiveTrainingPlan(true).catch(() => null),
-                  sbActiveProgram(true).catch(() => null),
-                ]);
-                const displaces = [];
-                if (curPlan && curPlan.id !== plan.id) displaces.push(`training plan "${curPlan.name}"`);
-                if (curProg) displaces.push(`program "${curProg.name}"`);
-                if (displaces.length) {
-                  const msg = `Activate "${plan.name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime.`;
+                // v32.3: type-aware confirm — only prompt for real conflicts.
+                const type = plan.plan_type || 'general';
+                const conflicts = await conflictingActivesFor_(type, plan.id, 'training_plans');
+                if (conflicts.length) {
+                  const names = conflicts.map(c => `"${c.name}"`).join(', ');
+                  const msg = `Activate "${plan.name}"?\n\nThis will deactivate ${names} because ${conflicts.length === 1 ? 'it conflicts' : 'they conflict'} with this ${type === 'general' ? 'plan' : type + ' plan'}. You can reactivate ${conflicts.length === 1 ? 'it' : 'them'} anytime.`;
                   if (!confirm(msg)) return;
-                  if (curProg) {
-                    await _sb.from('programs').update({ active: false }).eq('id', curProg.id);
-                    invalidateActiveProgramCache();
-                  }
                 }
                 await sbActivateTrainingPlan(plan.id);
-                toast(`"${plan.name}" is now your active plan`);
+                toast(`"${plan.name}" is now active`);
                 _trainingPlanDetailId = null;
                 setTimeout(() => render('training-plan'), 600);
               } catch (e) { toast('Could not activate: ' + e.message, true); }
@@ -9216,27 +9299,17 @@
       if (!name) { toast('Give the plan a name first', true); return; }
       if (!state.weeks_data) { toast('Generate a plan first', true); return; }
       try {
-        // Check for currently active plan/program so we can confirm
-        // displacement in ONE prompt (both types get deactivated).
-        const [curPlan, curProg] = await Promise.all([
-          sbActiveTrainingPlan(true).catch(() => null),
-          sbActiveProgram(true).catch(() => null),
-        ]);
-        const displaces = [];
-        if (curPlan) displaces.push(`training plan "${curPlan.name}"`);
-        if (curProg) displaces.push(`program "${curProg.name}"`);
-        if (displaces.length) {
-          const msg = `Activate "${name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime from the Programs tab.`;
+        // v32.3: only same-type + general get displaced. A lift program
+        // can happily coexist with this run plan.
+        const conflicts = await conflictingActivesFor_('run', null, 'training_plans');
+        if (conflicts.length) {
+          const names = conflicts.map(c => `"${c.name}"`).join(', ');
+          const msg = `Activate "${name}"?\n\nThis will deactivate ${names} because ${conflicts.length === 1 ? 'it conflicts' : 'they conflict'} with a new running plan. You can reactivate ${conflicts.length === 1 ? 'it' : 'them'} anytime.`;
           if (!confirm(msg)) return;
-          // Deactivate current active program (training plan gets swapped by sbSaveTrainingPlan).
-          if (curProg) {
-            await _sb.from('programs').update({ active: false }).eq('id', curProg.id);
-            invalidateActiveProgramCache();
-          }
         }
         const structure = convertRunPlanToTrainingPlan_(state, name, start);
-        const result = await sbSaveTrainingPlan({ name, structure, activate: true });
-        toast(`"${name}" is now your active plan`);
+        await sbSaveTrainingPlan({ name, structure, activate: true, planType: 'run' });
+        toast(`"${name}" is now your active run plan`);
         setTimeout(() => render('training-plan'), 700);
       } catch (e) {
         toast('Could not save: ' + (e.message || e), true);
@@ -9250,7 +9323,7 @@
       if (!state.weeks_data) { toast('Generate a plan first', true); return; }
       try {
         const structure = convertRunPlanToTrainingPlan_(state, name, start);
-        await sbSaveTrainingPlan({ name, structure, activate: false });
+        await sbSaveTrainingPlan({ name, structure, activate: false, planType: 'run' });
         toast(`Saved "${name}" to your library`);
         setTimeout(() => render('programs'), 700);
       } catch (e) {
