@@ -153,6 +153,11 @@
     .plan-dist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 4px; }
     .plan-dist-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 6px; text-align: center; cursor: pointer; color: var(--text); font-family: inherit; transition: border-color 0.15s, background 0.15s; }
     .plan-dist-btn.sel { border-color: var(--accent); background: rgba(255,107,53,0.12); }
+    /* Day-of-week picker for Run Planner (v32) — pick which days
+       generated plan sessions should slot into. */
+    .plan-dow-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; }
+    .plan-dow-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 0; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; font-family: inherit; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+    .plan-dow-btn.sel { border-color: var(--primary); background: rgba(36,80,196,0.10); color: var(--primary); }
     .plan-dist-icon { font-size: 18px; margin-bottom: 3px; }
     .plan-dist-name { font-size: 12px; font-weight: 700; display: block; }
     .plan-dist-sub { font-size: 10px; color: var(--muted); display: block; margin-top: 1px; }
@@ -1683,7 +1688,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v31';
+    const APP_VERSION = 'v32';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -5808,8 +5813,24 @@
         }
 
         if (archived.length) {
-          mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Archived'));
-          archived.forEach(p => mineWrap.appendChild(programCard_(p)));
+          // Collapsible archived section — heavy users may accumulate many
+          // archived programs. Header + chevron toggles the group.
+          const archHeader = el('button', {
+            style: 'background: transparent; border: none; padding: 8px 4px 6px; margin: 0; width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; cursor: pointer; color: var(--muted); font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase;',
+          }, [
+            el('span', {}, `Archived (${archived.length})`),
+            el('span', { id: 'archChevron', style: 'font-size: 12px; transition: transform 0.15s ease;' }, '›'),
+          ]);
+          const archBody = el('div', { id: 'archBody', style: 'display: none;' });
+          archived.forEach(p => archBody.appendChild(programCard_(p)));
+          archHeader.onclick = () => {
+            const isOpen = archBody.style.display !== 'none';
+            archBody.style.display = isOpen ? 'none' : 'block';
+            const chev = archHeader.querySelector('#archChevron');
+            if (chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+          };
+          mineWrap.appendChild(archHeader);
+          mineWrap.appendChild(archBody);
         }
 
         app.appendChild(mineWrap);
@@ -5850,7 +5871,7 @@
       importWrap.appendChild(importHistoryCard_());
       importWrap.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
-          "Coming next: Lift Session History CSV, Pull-Ups History CSV, and Training Plan CSV upload."),
+          "Coming next: Lift Session History CSV and Training Plan CSV upload."),
       ]));
       app.appendChild(importWrap);
     }
@@ -6452,6 +6473,35 @@
       return data;
     }
 
+    // Management helpers for training plans — mirror the programs
+    // archive/delete/activate flow. Cache invalidation ensures the
+    // Home widget + Programs banner update after a change.
+    function invalidateActiveTrainingPlanCache() { _activeTrainingPlanCache = null; }
+    async function sbArchiveTrainingPlan(id) {
+      const { error } = await _sb.from('training_plans')
+        .update({ active: false, archived_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      invalidateActiveTrainingPlanCache();
+    }
+    async function sbActivateTrainingPlan(id) {
+      // Deactivate any currently active plan first.
+      const uid = currentUser.id;
+      await _sb.from('training_plans').update({ active: false })
+        .eq('user_id', uid).eq('active', true).is('archived_at', null);
+      // Then activate this one and clear its archived_at.
+      const { error } = await _sb.from('training_plans')
+        .update({ active: true, archived_at: null })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+      invalidateActiveTrainingPlanCache();
+    }
+    async function sbDeleteTrainingPlan(id) {
+      const { error } = await _sb.from('training_plans').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      invalidateActiveTrainingPlanCache();
+    }
+
     function findPlanDay_(plan, isoDate) {
       const days = (plan && plan.structure && plan.structure.days) || [];
       return days.find(d => d.date === isoDate) || null;
@@ -6488,11 +6538,13 @@
         app.appendChild(el('div', { class: 'card' }, [
           el('h2', {}, 'No active training plan'),
           el('p', { class: 'muted', style: 'font-size: 14px; margin-top: 6px; line-height: 1.5;' },
-            "A training plan is a date-anchored schedule that tells you what to do on which day. Different from Programs (which are date-agnostic templates)."),
+            "A training plan is a date-anchored schedule that tells you what to do on which day. Different from Programs (date-agnostic templates you can start any time)."),
           el('p', { class: 'muted', style: 'font-size: 13px; margin-top: 10px; line-height: 1.5;' },
-            "To create one: build a Strength Plan CSV + Run Plan CSV, drop them in your Running Plans folder, and run:"),
-          el('pre', { style: 'background: var(--surface-2); padding: 10px; border-radius: 8px; font-size: 11px; overflow-x: auto; margin-top: 8px;' },
-            'python3 import_training_plan.py \\\n  --strength "Strength Plan.csv" \\\n  --run      "Run Plan.csv" \\\n  --name     "My Plan" \\\n  --year     2026 \\\n  --activate'),
+            "Head to Programs to generate one with the Run Planner, or import your own from a CSV."),
+          el('button', {
+            onclick: () => render('programs'),
+            style: 'margin-top: 12px;',
+          }, 'Go to Programs'),
         ]));
         return;
       }
@@ -6505,13 +6557,38 @@
                                                  : (firstUpcomingPlanDay_(plan, today) || { date: today }).date);
       _trainingPlanViewDate = viewDate;
 
-      // Plan header
+      // Plan header + management buttons (Archive / Delete). Same
+      // shape as programs so users don't have to learn two flows.
       const startDate = cfg.start_date || plan.start_date;
       const endDate   = cfg.end_date   || plan.end_date;
       app.appendChild(el('div', { class: 'card' }, [
         el('h2', { style: 'margin-bottom: 4px;' }, plan.name),
         el('div', { class: 'muted', style: 'font-size: 13px;' },
           `${startDate} → ${endDate}${cfg.total_weeks ? ' · ' + cfg.total_weeks + ' weeks' : ''}`),
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;' }, [
+          el('button', {
+            style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+            onclick: async () => {
+              if (!confirm(`Archive "${plan.name}"? Your logged workouts stay, but the plan stops driving Today's Workout on Home. You can reactivate it later.`)) return;
+              try {
+                await sbArchiveTrainingPlan(plan.id);
+                toast('Plan archived');
+                setTimeout(() => render('programs'), 500);
+              } catch (e) { toast('Could not archive: ' + e.message, true); }
+            },
+          }, 'Archive plan'),
+          el('button', {
+            style: 'flex: 1; background: var(--surface-2); color: #d97a7a; border: 1px solid var(--border);',
+            onclick: async () => {
+              if (!confirm(`Delete "${plan.name}" permanently? Workouts you logged under this plan are kept, but the plan itself is gone.`)) return;
+              try {
+                await sbDeleteTrainingPlan(plan.id);
+                toast('Plan deleted');
+                setTimeout(() => render('programs'), 500);
+              } catch (e) { toast('Could not delete: ' + e.message, true); }
+            },
+          }, 'Delete plan'),
+        ]),
       ]));
 
       // Date navigator — prev / date label / next
@@ -8594,6 +8671,17 @@
           </div>
           <div class="plan-slider-row">
             <div class="plan-slider-hdr">
+              <label>Which days can you run?</label>
+              <div class="muted" style="font-size:11px">Optional — leave blank and we'll pick sensible defaults</div>
+            </div>
+            <div class="plan-dow-row" id="pDows">
+              ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i) => `
+                <button type="button" class="plan-dow-btn${(savedState.dows||[]).includes(i)?' sel':''}" data-dow="${i}" onclick="planToggleDow(${i})">${d}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
               <label>Program duration</label>
               <div class="plan-slider-val" id="pWeeksVal">12 <span>wks</span></div>
             </div>
@@ -8618,8 +8706,22 @@
         if (savedState.raceTime) { document.getElementById('pRaceToggle').classList.add('active'); document.getElementById('pRaceFields').classList.add('vis'); }
       }
 
+      // Restore day-of-week selections into module state (used by planGenerate)
+      window.planSelectedDows = Array.isArray(savedState.dows) ? savedState.dows.slice() : [];
+
       // If there's a saved generated plan, show it
       if (savedState.weeks_data) pShowOutput(savedState);
+    }
+
+    // Toggle a day-of-week checkbox in the Run Planner form. Mon=0..Sun=6.
+    function planToggleDow(i) {
+      if (!Array.isArray(window.planSelectedDows)) window.planSelectedDows = [];
+      const arr = window.planSelectedDows;
+      const idx = arr.indexOf(i);
+      if (idx > -1) arr.splice(idx, 1);
+      else arr.push(i);
+      const btn = document.querySelector(`.plan-dow-btn[data-dow="${i}"]`);
+      if (btn) btn.classList.toggle('sel');
     }
 
     function planGenerate() {
@@ -8645,7 +8747,8 @@
         weeksData.push(wk);
         totalMi += wk.total;
       }
-      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
+      const dows = Array.isArray(window.planSelectedDows) ? window.planSelectedDows.slice().sort() : [];
+      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
       try { localStorage.setItem('runPlanState_v1', JSON.stringify(state)); } catch(e) {}
       pShowOutput(state);
     }
