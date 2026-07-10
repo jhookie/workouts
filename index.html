@@ -1803,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.1';
+    const APP_VERSION = 'v32.4.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3668,57 +3668,87 @@
 
     async function widgetTodaysWorkout_({ app }) {
       try {
-        // v32.3: iterate over ALL active training plans, not just one.
+        // v32.4.2: iterate over BOTH training plans and active programs.
+        // Training plans are date-anchored (specific workout on this date);
+        // programs are rotation-based (Day A/B/C) — we surface them as a
+        // "log a lift from this program" prompt without guessing which day.
         const items = await sbListActiveWorkoutItems();
-        const plans = items.filter(it => it.source === 'training_plan');
-        if (!plans.length) return; // silent when no plans
+        if (!items.length) return; // silent when nothing active
 
         const today = todayISO();
-        // Collect "what's on for today or next" per plan.
-        const perPlan = [];
-        plans.forEach(plan => {
-          const day = findPlanDay_(plan, today);
-          const next = day ? null : firstUpcomingPlanDay_(plan, today);
-          if (day || next) {
-            perPlan.push({ plan, shownDay: day || next, isToday: !!day });
+        const rows = [];
+
+        items.forEach(item => {
+          if (item.source === 'training_plan') {
+            const day = findPlanDay_(item, today);
+            const next = day ? null : firstUpcomingPlanDay_(item, today);
+            if (day || next) {
+              rows.push({ kind: 'plan', item, shownDay: day || next, isToday: !!day });
+            }
+          } else if (item.source === 'program') {
+            // Programs get a "log a lift" prompt row.
+            rows.push({ kind: 'program', item });
           }
         });
-        if (!perPlan.length) return;
 
-        const anyToday = perPlan.some(x => x.isToday);
+        if (!rows.length) return;
+
+        const anyToday = rows.some(r => r.isToday || r.kind === 'program');
         const card = el('div', { class: 'card' });
         card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
           el('h2', { style: 'margin: 0;' }, anyToday ? "Today's workout" : 'Next workout'),
           el('span', { class: 'muted', style: 'font-size: 12px;' }, ''),
         ]));
 
-        perPlan.forEach(({ plan, shownDay, isToday }, i) => {
-          const wd = new Date(shownDay.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-          const summary = (shownDay.sessions || []).map(s => {
-            if (s.type === 'lift') return s.name;
-            if (s.type === 'run') {
-              const bits = [s.name];
-              if (s.target_miles) bits.push(`${s.target_miles} mi`);
-              return bits.join(' · ');
-            }
-            return s.name || '';
-          }).join(' + ');
-          const typeLabel = (plan.plan_type || 'general').toUpperCase();
-          const row = el('div', {
-            style: 'padding: 10px 0; border-top: 1px solid var(--border); cursor: pointer;'
-                 + (i === 0 ? ' border-top-color: transparent; padding-top: 0;' : ''),
-            onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
-          }, [
-            el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
-              `${typeLabel} · ${plan.name}${isToday ? '' : ' · ' + wd}`),
-            el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' }, summary || '—'),
-            shownDay.week ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, `Week ${shownDay.week}`) : null,
-          ]);
-          card.appendChild(row);
+        rows.forEach((row, i) => {
+          const isFirst = i === 0;
+          const baseStyle = 'padding: 10px 0; border-top: 1px solid var(--border); cursor: pointer;'
+                         + (isFirst ? ' border-top-color: transparent; padding-top: 0;' : '');
+
+          if (row.kind === 'plan') {
+            const { item: plan, shownDay, isToday } = row;
+            const wd = new Date(shownDay.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const summary = (shownDay.sessions || []).map(s => {
+              if (s.type === 'lift') return s.name;
+              if (s.type === 'run') {
+                const bits = [s.name];
+                if (s.target_miles) bits.push(`${s.target_miles} mi`);
+                return bits.join(' · ');
+              }
+              return s.name || '';
+            }).join(' + ');
+            const typeLabel = (plan.plan_type || 'general').toUpperCase();
+            card.appendChild(el('div', {
+              style: baseStyle,
+              onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
+            }, [
+              el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
+                `${typeLabel} · ${plan.name}${isToday ? '' : ' · ' + wd}`),
+              el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' }, summary || '—'),
+              shownDay.week ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, `Week ${shownDay.week}`) : null,
+            ]));
+          } else if (row.kind === 'program') {
+            const { item: prog } = row;
+            const s = prog.structure || {};
+            const dayLetters = s.day_letters || [];
+            const weekCount = s.weeks_total || (Array.isArray(s.weeks) ? s.weeks.length : 0);
+            const typeLabel = (prog.plan_type || 'lift').toUpperCase();
+            card.appendChild(el('div', {
+              style: baseStyle,
+              onclick: () => render('lift'),
+            }, [
+              el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
+                `${typeLabel} · ${prog.name}`),
+              el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' },
+                'Log a lift from this program →'),
+              el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' },
+                `${weekCount} weeks · Days ${dayLetters.join('/')}`),
+            ]));
+          }
         });
 
         card.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px; text-align: right;' },
-          'Tap a row to open the plan →'));
+          'Tap a row to open →'));
         app.appendChild(card);
       } catch (e) { /* silent */ }
     }
