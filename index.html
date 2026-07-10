@@ -1803,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.2';
+    const APP_VERSION = 'v32.4.3';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3303,7 +3303,11 @@
     }
 
     // -------- Render --------
+    // v32.4.3: track the previous view so back buttons can return there
+    // instead of always hardcoding a destination.
+    let _previousView = null;
     async function render(view) {
+      if (view !== currentView) _previousView = currentView;
       currentView = view;
       const app = $('#app');
 
@@ -3718,9 +3722,37 @@
               return s.name || '';
             }).join(' + ');
             const typeLabel = (plan.plan_type || 'general').toUpperCase();
+            // v32.4.3: route DIRECTLY to the appropriate logger for today's
+            // session — saves a tap and matches the "one tap to log" flow
+            // users expect from the Today's Workout tile. Only fall back
+            // to the plan viewer when there's no obvious logger (unknown
+            // session type or future-dated).
+            const rowClick = () => {
+              if (!isToday) {
+                _trainingPlanViewDate = shownDay.date;
+                return render('training-plan');
+              }
+              const sessions = shownDay.sessions || [];
+              const liftIdx = sessions.findIndex(s => s.type === 'lift');
+              const runIdx  = sessions.findIndex(s => s.type === 'run');
+              // Prefer lift over run when both are on the same day —
+              // the run screen doesn't yet auto-prefill from plan sessions.
+              if (liftIdx !== -1) {
+                _planLogRef = {
+                  date: shownDay.date,
+                  sessionIndex: liftIdx,
+                  session: sessions[liftIdx],
+                  dayEntry: shownDay,
+                };
+                return render('plan-log-lift');
+              }
+              if (runIdx !== -1) return render('run');
+              _trainingPlanViewDate = shownDay.date;
+              return render('training-plan');
+            };
             card.appendChild(el('div', {
               style: baseStyle,
-              onclick: () => { _trainingPlanViewDate = shownDay.date; render('training-plan'); },
+              onclick: rowClick,
             }, [
               el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
                 `${typeLabel} · ${plan.name}${isToday ? '' : ' · ' + wd}`),
@@ -3735,7 +3767,13 @@
             const typeLabel = (prog.plan_type || 'lift').toUpperCase();
             card.appendChild(el('div', {
               style: baseStyle,
-              onclick: () => render('lift'),
+              onclick: () => {
+                // v32.4.3: bypass the training plan auto-route so the
+                // program row actually opens the PROGRAM'S logger even
+                // when a training plan has a lift scheduled for today.
+                _bypassPlanAutoRouteForLift = true;
+                render('lift');
+              },
             }, [
               el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
                 `${typeLabel} · ${prog.name}`),
@@ -3981,30 +4019,41 @@
       });
     }
 
+    // v32.4.3: set by Today's Workout program row so renderLift skips
+    // the training plan auto-route and uses the program's lift logger
+    // instead. Cleared after one use.
+    let _bypassPlanAutoRouteForLift = false;
+
     async function renderLift(app) {
       // If a training plan is active and today has a lift session, route the
       // user straight into the plan-based logger. This makes tapping "Lift"
       // from Home do the right thing for plan-users (they don't want the
       // Push/Pull program logger; they want today's programmed session).
-      try {
-        const plan = await sbActiveTrainingPlan();
-        if (plan) {
-          const today = todayISO();
-          const dayEntry = findPlanDay_(plan, today);
-          if (dayEntry) {
-            const liftSessIdx = (dayEntry.sessions || []).findIndex(s => s.type === 'lift');
-            if (liftSessIdx !== -1) {
-              _planLogRef = {
-                date: today,
-                sessionIndex: liftSessIdx,
-                session: dayEntry.sessions[liftSessIdx],
-                dayEntry,
-              };
-              return render('plan-log-lift');
+      // BUT: when the user tapped a specific PROGRAM row on Home, we bypass
+      // this and let them log against that program.
+      const bypass = _bypassPlanAutoRouteForLift;
+      _bypassPlanAutoRouteForLift = false;
+      if (!bypass) {
+        try {
+          const plan = await sbActiveTrainingPlan();
+          if (plan) {
+            const today = todayISO();
+            const dayEntry = findPlanDay_(plan, today);
+            if (dayEntry) {
+              const liftSessIdx = (dayEntry.sessions || []).findIndex(s => s.type === 'lift');
+              if (liftSessIdx !== -1) {
+                _planLogRef = {
+                  date: today,
+                  sessionIndex: liftSessIdx,
+                  session: dayEntry.sessions[liftSessIdx],
+                  dayEntry,
+                };
+                return render('plan-log-lift');
+              }
             }
           }
-        }
-      } catch (e) { /* fall through to legacy program-based lift logger */ }
+        } catch (e) { /* fall through to legacy program-based lift logger */ }
+      }
 
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Log Lift'),
@@ -7021,13 +7070,17 @@
 
     async function renderTrainingPlan(app) {
       app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Training plan')]));
-      // Back link — this screen is reachable from Home widget + Programs
-      // banner, both of which live "under" the Programs nav slot.
+      // v32.4.3: Back button routes to whatever view the user came from
+      // (Home, Programs, Calendar, etc.) instead of hardcoding Programs.
+      const backTo = _previousView && _previousView !== 'training-plan' ? _previousView : 'programs';
+      const backLabel = backTo === 'home' ? '← Back to Home'
+                      : backTo === 'calendar' ? '← Back to Calendar'
+                      : '← Back to Programs';
       app.appendChild(el('button', {
         class: 'btn-link',
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
-        onclick: () => render('programs'),
-      }, '← Back to Programs'));
+        onclick: () => render(backTo),
+      }, backLabel));
 
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
       app.appendChild(skel);
@@ -7361,11 +7414,20 @@
         el('h1', {}, session.name || 'Log workout'),
         el('span', { class: 'date' }, fmtDateLong(new Date(date + 'T12:00:00'))),
       ]));
+      // v32.4.3: Back button returns to the view the user came from.
+      // Home users jumped straight here from Today's Workout, so their
+      // back button should go to Home — not the plan viewer they never
+      // saw.
+      const backTo2 = _previousView && !['plan-log-lift'].includes(_previousView)
+                     ? _previousView : 'training-plan';
+      const backLabel2 = backTo2 === 'home' ? '← Back to Home'
+                       : backTo2 === 'calendar' ? '← Back to Calendar'
+                       : '← Back to plan';
       app.appendChild(el('button', {
         class: 'btn-link',
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
-        onclick: () => { render('training-plan'); },
-      }, '← Back to plan'));
+        onclick: () => { render(backTo2); },
+      }, backLabel2));
 
       // Escape hatch: log freestyle instead of the scheduled session.
       app.appendChild(el('button', {
