@@ -3,9 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#0a0a0a" />
+  <meta name="theme-color" content="#F4F7FF" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bitter:wght@400;500;600;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Loggbok" />
   <meta name="description" content="Your canonical training record. Multi-modal logging for runs, lifts, walks, rides, hikes, swims, and everything in between." />
   <meta property="og:title" content="Loggbok" />
@@ -17,31 +20,58 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
   <title>Loggbok</title>
   <style>
+    /* Loggbok brand tokens — light theme. Palette + type from the brand
+       style guide. Dark theme is preserved conceptually via a data-theme
+       attribute hook we can flip later if we build a light/dark toggle. */
     :root {
-      --bg: #0a0a0a;
-      --surface: #141414;
-      --surface-2: #1d1d1d;
-      --border: #2a2a2a;
-      --text: #f5f5f5;
-      --muted: #8a8a8a;
-      --accent: #ff6b35;
-      --success: #32d74b;
-      --warn: #ff9f0a;
-      --danger: #ff453a;
-      --radius: 14px;
-      --radius-lg: 20px;
-      --shadow: 0 2px 14px rgba(0,0,0,0.4);
+      /* Canvas + surfaces */
+      --bg: #F4F7FF;          /* soft blue-white page background */
+      --surface: #FFFFFF;      /* card surface */
+      --surface-2: #EEF1F9;    /* subtle raised / hover surface */
+      --border: #E4E9F5;       /* card / input border */
+
+      /* Ink */
+      --text: #1A1A1A;         /* primary text */
+      --muted: #7a7568;        /* warm gray — brand muted */
+      --muted-cool: #9aa3ba;   /* cool blue-gray — used on blue surfaces */
+
+      /* Brand */
+      --primary: #2450C4;      /* deep blue — primary brand */
+      --primary-dark: #1E3F9E;
+      --primary-ink: #0d1d47;  /* deepest brand ink for hero areas */
+      --accent: #F4622C;       /* warm orange — action accent */
+      --accent-dark: #D93A2B;
+
+      /* Semantic */
+      --success: #8CC63F;
+      --warn: #B08D57;
+      --danger: #D93A2B;
+
+      /* Shape */
+      --radius: 12px;
+      --radius-lg: 16px;
+      --radius-pill: 22px;
+      --shadow: 0 1px 3px rgba(15, 25, 60, 0.06), 0 2px 12px rgba(15, 25, 60, 0.05);
+      --shadow-hover: 0 2px 6px rgba(15, 25, 60, 0.08), 0 4px 20px rgba(15, 25, 60, 0.08);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body {
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      font-family: 'Work Sans', -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
       font-size: 16px;
-      line-height: 1.4;
+      line-height: 1.5;
       -webkit-font-smoothing: antialiased;
       overscroll-behavior-y: contain;
     }
+    /* Bitter serif for headings — brand voice */
+    h1, h2, h3, h4, .brand-heading, .auth-title {
+      font-family: 'Bitter', Georgia, 'Times New Roman', serif;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+    h1 { letter-spacing: -0.02em; }
     body {
       min-height: 100vh;
       display: flex;
@@ -77,12 +107,15 @@
       padding: 16px;
       margin-bottom: 12px;
       border: 1px solid var(--border);
+      box-shadow: var(--shadow);
     }
+    /* Section eyebrow (uppercase small label at top of a card). */
     .card h2 {
-      font-size: 13px;
-      font-weight: 600;
+      font-family: 'Work Sans', -apple-system, sans-serif;
+      font-size: 12px;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       color: var(--muted);
       margin-bottom: 12px;
     }
@@ -106,13 +139,15 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    .pill.chest { background: #3a1f1a; color: #ff9b7a; }
-    .pill.back  { background: #1a2a3a; color: #7ab7ff; }
-    .pill.bicep, .pill.tricep { background: #3a2a1a; color: #ffc07a; }
-    .pill.shoulder { background: #2a1a3a; color: #c07aff; }
-    .pill.micro { background: #1a3a2a; color: #7affb7; }
-    .pill.intensity { background: #3a1a1a; color: #ff7a7a; }
-    .pill.core { background: #1a1a3a; color: #7a9bff; }
+    /* Muscle-group + intensity pills — soft tinted backgrounds with rich
+       readable ink for light theme. */
+    .pill.chest { background: #FCE7DE; color: #B04A1E; }
+    .pill.back  { background: #E4EAFA; color: #1E3F9E; }
+    .pill.bicep, .pill.tricep { background: #FCF0DA; color: #8A5A1E; }
+    .pill.shoulder { background: #EFE4FA; color: #5B2E9E; }
+    .pill.micro { background: #E4F5E4; color: #2E7A2E; }
+    .pill.intensity { background: #FADCDC; color: #A83030; }
+    .pill.core { background: #E4E9F5; color: #2450C4; }
 
     /* ---- RUN PLANNER TAB ---- */
     .plan-dist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 4px; }
@@ -206,12 +241,12 @@
     /* ---- Auth screen ---- */
     .auth-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:calc(100vh - 80px); padding:24px; gap:0; }
     .auth-logo { font-size:52px; margin-bottom:10px; }
-    .auth-title { font-size:26px; font-weight:700; margin-bottom:4px; }
-    .auth-sub { color:var(--muted); font-size:14px; text-align:center; margin-bottom:28px; }
-    .auth-card { width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; display:flex; flex-direction:column; gap:12px; }
-    .auth-card input[type="email"] { width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:16px; padding:14px 16px; transition:border-color .15s; }
+    .auth-title { font-size:44px; font-weight:700; margin-bottom:6px; letter-spacing:-0.02em; color:var(--primary-ink); }
+    .auth-sub { color:var(--muted); font-size:15px; text-align:center; margin-bottom:28px; font-style:italic; }
+    .auth-card { width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; display:flex; flex-direction:column; gap:12px; box-shadow:var(--shadow); }
+    .auth-card input[type="email"] { width:100%; background:#FFF; border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:16px; padding:14px 16px; transition:border-color .15s; font-family:'Work Sans',sans-serif; }
     .auth-card input[type="email"]::placeholder { color:var(--muted); }
-    .auth-card input[type="email"]:focus { outline:none; border-color:var(--accent); }
+    .auth-card input[type="email"]:focus { outline:none; border-color:var(--primary); }
     .auth-confirm { text-align:center; padding:8px 0; }
     .auth-confirm .auth-check { font-size:38px; margin-bottom:10px; }
     .auth-confirm p { color:var(--muted); font-size:14px; line-height:1.6; }
@@ -242,12 +277,12 @@
     button.danger { background: var(--danger); }
 
     input, select, textarea {
-      background: var(--surface-2);
+      background: #FFFFFF;
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 10px 12px;
-      font-family: inherit;
+      font-family: 'Work Sans', -apple-system, sans-serif;
       font-size: 16px;
       width: 100%;
       -webkit-appearance: none;
@@ -256,7 +291,8 @@
     input[inputmode="decimal"], input[inputmode="numeric"] { text-align: center; }
     input:focus, select:focus, textarea:focus {
       outline: none;
-      border-color: var(--accent);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(36, 80, 196, 0.12);
     }
     label {
       display: block;
@@ -521,11 +557,13 @@
       background: var(--surface-2);
       color: var(--muted);
     }
-    .history-tag.tag-lift     { background: #3a1a0d; color: #ff9b7a; }
-    .history-tag.tag-run      { background: #0d2a3a; color: #7ab7ff; }
-    .history-tag.tag-walk     { background: #0d3a2a; color: #7ade95; }
-    .history-tag.tag-pullups  { background: #0d3a24; color: #7affb7; }
-    .history-tag.tag-activity { background: #2a1a3a; color: #b47aff; }
+    /* History type tags — light-theme tinted backgrounds keyed off the
+       calendar-dot colors. */
+    .history-tag.tag-lift     { background: #FCE7DE; color: #B04A1E; }
+    .history-tag.tag-run      { background: #E4EAFA; color: #1E3F9E; }
+    .history-tag.tag-walk     { background: #E4F5E4; color: #2E7A2E; }
+    .history-tag.tag-pullups  { background: #F5EDD8; color: #8A6E1E; }
+    .history-tag.tag-activity { background: #EFE4FA; color: #5B2E9E; }
     .session-ex-head {
       display: flex;
       justify-content: space-between;
@@ -1046,9 +1084,9 @@
       width: 100%;
     }
     .cal-day.empty { background: transparent; pointer-events: none; }
-    .cal-day.today { border-color: var(--accent); color: var(--accent); }
-    .cal-day.has-activity { background: #1a1a1a; }
-    .cal-day.selected { border-color: var(--accent); background: #2a1a10; }
+    .cal-day.today { border-color: var(--primary); color: var(--primary); font-weight: 700; }
+    .cal-day.has-activity { background: var(--surface-2); }
+    .cal-day.selected { border-color: var(--accent); background: #FDECE3; }
     .cal-num { text-align: left; line-height: 1; }
     .cal-dots {
       display: flex;
@@ -1056,14 +1094,15 @@
       justify-content: flex-end;
     }
     /* Dot colors are CSS variables so users can customize them at runtime
-       via Profile → Calendar colors. Defaults set here; overrides applied
-       on :root by setDotColors_() from localStorage.  */
+       via Profile → Calendar colors. Defaults set here to work on the
+       light Loggbok canvas; overrides applied on :root by setDotColors_()
+       from localStorage. */
     :root {
-      --dot-lift:     #ff6b35;
-      --dot-run:      #7ab7ff;
-      --dot-walk:     #7ade95;
-      --dot-pull:     #ffd77a;
-      --dot-activity: #b47aff;
+      --dot-lift:     #F4622C;   /* brand orange */
+      --dot-run:      #2450C4;   /* brand blue */
+      --dot-walk:     #4A8B2E;   /* rich green — readable on light bg */
+      --dot-pull:     #B08D57;   /* brand tan */
+      --dot-activity: #7B3FD1;   /* rich purple */
     }
     .cal-dot { width: 5px; height: 5px; border-radius: 50%; }
     .cal-dot.lift     { background: var(--dot-lift); }
@@ -1107,7 +1146,7 @@
     .shoe-miles.warn  { color: var(--warn); }
     .shoe-miles.danger { color: var(--danger); }
     .shoe-bar {
-      height: 6px; background: #0d0d0d; border-radius: 3px; overflow: hidden;
+      height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden;
       margin-top: 8px;
     }
     .shoe-bar-fill { height: 100%; background: var(--success); border-radius: 3px; }
@@ -1191,7 +1230,7 @@
     }
     .bar-row .label { color: var(--muted); font-weight: 600; }
     .bar-row .val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
-    .bar-row.zero .bar-fill { background: #2a2a2a; }
+    .bar-row.zero .bar-fill { background: var(--border); }
     .bar-row.zero .val { color: var(--muted); }
 
     /* Analytics best-efforts table */
@@ -1644,7 +1683,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v30';
+    const APP_VERSION = 'v31';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3079,7 +3118,7 @@
       const wrap = el('div', { class: 'auth-wrap' }, [
         el('div', { class: 'auth-logo' }, '🏃'),
         el('h1', { class: 'auth-title' }, 'Loggbok'),
-        el('p', { class: 'auth-sub' }, 'Your training record. Sign in to continue.'),
+        el('p', { class: 'auth-sub' }, 'Every workout, one log.'),
         el('div', { class: 'auth-card', id: 'auth-card' }, [
           el('input', { type: 'email', id: 'auth-email', placeholder: 'your@email.com', autocomplete: 'email' }),
           el('button', { class: 'btn', id: 'auth-send-btn', onclick: authSendCode }, 'Send code'),

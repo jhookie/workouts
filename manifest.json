@@ -1,12 +1,12 @@
 {
   "name": "Loggbok",
   "short_name": "Loggbok",
-  "description": "Your canonical training record. Multi-modal logging for runs, lifts, walks, rides, hikes, swims, and everything in between.",
+  "description": "Every workout, one log. Multi-modal training tracker for runs, lifts, walks, rides, hikes, swims, and everything in between.",
   "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0a0a0a",
-  "theme_color": "#0a0a0a",
+  "background_color": "#F4F7FF",
+  "theme_color": "#F4F7FF",
   "icons": [
     {
       "src": "icon-192.png",
