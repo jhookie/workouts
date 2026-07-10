@@ -1688,7 +1688,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32';
+    const APP_VERSION = 'v32.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -6106,6 +6106,26 @@
           !p.active ? el('button', {
             onclick: async () => {
               try {
+                // Look up whatever is currently active so we can prompt
+                // the user before silently deactivating it.
+                const [curPlan, curProg] = await Promise.all([
+                  sbActiveTrainingPlan(true).catch(() => null),
+                  sbActiveProgram(true).catch(() => null),
+                ]);
+                const displaces = [];
+                if (curPlan) displaces.push(`training plan "${curPlan.name}"`);
+                if (curProg && curProg.id !== p.id) displaces.push(`program "${curProg.name}"`);
+                if (displaces.length) {
+                  const msg = `Activate "${p.name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime.`;
+                  if (!confirm(msg)) return;
+                  // sbActivateProgram deactivates other programs itself;
+                  // we handle deactivating the training plan here.
+                  if (curPlan) {
+                    await _sb.from('training_plans').update({ active: false })
+                      .eq('id', curPlan.id);
+                    invalidateActiveTrainingPlanCache();
+                  }
+                }
                 await sbActivateProgram(p.id);
                 invalidateActiveProgramCache();
                 toast('Activated');
@@ -6500,6 +6520,105 @@
       const { error } = await _sb.from('training_plans').delete().eq('id', id);
       if (error) throw new Error(error.message);
       invalidateActiveTrainingPlanCache();
+    }
+
+    // Save a training plan generated from a builder (Run Planner, etc.).
+    // Returns { id, displacedName }. If activate=true, deactivates any
+    // currently-active plan first and reports its name in displacedName so
+    // the caller can toast a helpful message.
+    async function sbSaveTrainingPlan({ name, structure, notes, activate }) {
+      const uid = currentUser.id;
+      let displacedName = null;
+      if (activate) {
+        const { data: cur } = await _sb.from('training_plans')
+          .select('id,name').eq('user_id', uid).eq('active', true)
+          .is('archived_at', null).maybeSingle();
+        if (cur) {
+          displacedName = cur.name;
+          await _sb.from('training_plans').update({ active: false })
+            .eq('user_id', uid).eq('active', true).is('archived_at', null);
+        }
+      }
+      const cfg = structure.config || {};
+      const { data, error } = await _sb.from('training_plans').insert({
+        user_id: uid,
+        name,
+        start_date: cfg.start_date,
+        end_date:   cfg.end_date,
+        active:     !!activate,
+        structure,
+        notes:      notes || null,
+      }).select('id').single();
+      if (error) throw new Error(error.message);
+      invalidateActiveTrainingPlanCache();
+      return { id: data.id, displacedName };
+    }
+
+    // Convert a Run Planner in-memory state (from planGenerate) to the
+    // training_plans.structure JSONB shape. Slots each week's workouts
+    // into the user's selected days-of-week (0=Mon..6=Sun). If no days
+    // are selected, uses sensible defaults based on days-per-week.
+    function defaultDowsForRunPlanCount_(daysPerWeek) {
+      const map = {
+        2: [1, 5],           // Tue, Sat
+        3: [1, 3, 5],        // Tue, Thu, Sat
+        4: [1, 3, 4, 5],     // Tue, Thu, Fri, Sat
+        5: [0, 2, 3, 4, 5],  // Mon, Wed, Thu, Fri, Sat
+      };
+      return map[daysPerWeek] || [1, 3, 5];
+    }
+    function convertRunPlanToTrainingPlan_(state, planName, startDateISO) {
+      // Anchor the plan to the Monday on-or-before startDateISO so
+      // week rows line up with a normal week grid.
+      const raw = new Date(startDateISO + 'T12:00:00');
+      const jsDow = raw.getDay(); // 0=Sun..6=Sat
+      const monOffset = (jsDow + 6) % 7; // days to go BACK to reach Mon
+      const anchor = new Date(raw);
+      anchor.setDate(raw.getDate() - monOffset);
+
+      // Preferred days-of-week to slot into (0=Mon..6=Sun).
+      const dows = (Array.isArray(state.dows) && state.dows.length)
+        ? [...state.dows].sort((a,b)=>a-b)
+        : defaultDowsForRunPlanCount_(state.days);
+
+      const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const days = [];
+      (state.weeks_data || []).forEach((wk, wi) => {
+        const wos = wk.wos || [];
+        const slotCount = Math.min(wos.length, dows.length);
+        for (let i = 0; i < slotCount; i++) {
+          const wo = wos[i];
+          const dowIdx = dows[i];
+          const d = new Date(anchor);
+          d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
+          days.push({
+            date: d.toISOString().slice(0, 10),
+            week: wi + 1,
+            dow: dowNames[dowIdx],
+            sessions: [{
+              type: 'run',
+              name: wo.name,
+              workout_kind: wo.typeLabel || '',
+              target_miles: wo.dist,
+              main_set: wo.desc || '',
+              target_pace_hr: wo.paceOverride || '',
+            }],
+          });
+        }
+      });
+      const startISO = anchor.toISOString().slice(0, 10);
+      const endISO = days.length ? days[days.length - 1].date : startISO;
+      return {
+        config: {
+          start_date: startISO,
+          end_date:   endISO,
+          total_weeks: state.weeks,
+          generator: 'run-planner',
+          run_walk_run: !!state.runWalk,
+          run_walk_ratio: state.runWalkRatio || null,
+        },
+        days,
+      };
     }
 
     function findPlanDay_(plan, isoDate) {
@@ -8680,6 +8799,23 @@
               `).join('')}
             </div>
           </div>
+          <div class="plan-optional" id="pRWRToggle" onclick="this.classList.toggle('active');document.getElementById('pRWRFields').classList.toggle('vis');pRWRUpdateState()">
+            <span style="font-size:18px">🚶</span>
+            <div class="plan-opt-text"><strong>Use walk breaks (Galloway method)</strong><small>Great for beginners, returners, and long-distance base building</small></div>
+            <span class="plan-opt-arrow">›</span>
+          </div>
+          <div class="plan-race-fields" id="pRWRFields">
+            <div class="plan-race-col" style="flex:1">
+              <label>Run : Walk ratio</label>
+              <select id="pRWRRatio">
+                <option value="2:1">2 min run / 1 min walk</option>
+                <option value="3:1">3 min run / 1 min walk</option>
+                <option value="4:1" selected>4 min run / 1 min walk</option>
+                <option value="5:1">5 min run / 1 min walk</option>
+                <option value="6:1">6 min run / 1 min walk</option>
+              </select>
+            </div>
+          </div>
           <div class="plan-slider-row">
             <div class="plan-slider-hdr">
               <label>Program duration</label>
@@ -8709,9 +8845,24 @@
       // Restore day-of-week selections into module state (used by planGenerate)
       window.planSelectedDows = Array.isArray(savedState.dows) ? savedState.dows.slice() : [];
 
+      // Restore Run-Walk-Run toggle + ratio if the user had it enabled
+      if (savedState.runWalk) {
+        document.getElementById('pRWRToggle')?.classList.add('active');
+        document.getElementById('pRWRFields')?.classList.add('vis');
+        if (savedState.runWalkRatio) {
+          const r = document.getElementById('pRWRRatio');
+          if (r) r.value = savedState.runWalkRatio;
+        }
+      }
+
       // If there's a saved generated plan, show it
       if (savedState.weeks_data) pShowOutput(savedState);
     }
+
+    // Called when user toggles the Run-Walk-Run collapsible.
+    // No-op right now (form values are read directly at generate time);
+    // kept as a hook in case we later want to preview the change.
+    function pRWRUpdateState() {}
 
     // Toggle a day-of-week checkbox in the Run Planner form. Mon=0..Sun=6.
     function planToggleDow(i) {
@@ -8748,7 +8899,9 @@
         totalMi += wk.total;
       }
       const dows = Array.isArray(window.planSelectedDows) ? window.planSelectedDows.slice().sort() : [];
-      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
+      const runWalk = document.getElementById('pRWRToggle')?.classList.contains('active') || false;
+      const runWalkRatio = runWalk ? (document.getElementById('pRWRRatio')?.value || '4:1') : null;
+      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, runWalk, runWalkRatio, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
       try { localStorage.setItem('runPlanState_v1', JSON.stringify(state)); } catch(e) {}
       pShowOutput(state);
     }
@@ -8780,16 +8933,27 @@
           </div>
         </div>`;
       }
+      const rwrBanner = state.runWalk ? `
+        <div class="card" style="margin-bottom:12px;background:rgba(36,80,196,0.06);border-color:rgba(36,80,196,0.2)">
+          <div style="display:flex;gap:12px;align-items:center">
+            <div style="font-size:24px">🚶</div>
+            <div>
+              <div style="font-weight:700;font-size:14px;color:var(--primary)">Run-Walk-Run · ${state.runWalkRatio || '4:1'}</div>
+              <div class="muted" style="font-size:12px;margin-top:2px;line-height:1.4">Apply this ratio to every run session in the plan. Alternate between running and walking on the minute — your total distance stays the same but joint impact drops and recovery improves.</div>
+            </div>
+          </div>
+        </div>` : '';
       out.innerHTML = `
         <div class="card" style="margin-bottom:12px">
           <div style="font-size:20px;font-weight:800;letter-spacing:-0.02em;margin-bottom:2px">${dist.label} Training Plan</div>
-          <div class="muted" style="font-size:13px;margin-bottom:16px">${levelNames[state.level]} · ${state.days} days/week</div>
+          <div class="muted" style="font-size:13px;margin-bottom:16px">${levelNames[state.level]} · ${state.days} days/week${state.runWalk ? ' · Walk breaks ' + (state.runWalkRatio||'4:1') : ''}</div>
           <div class="plan-stats">
             <div class="plan-stat"><div class="sv">${state.weeks}</div><div class="sl">Weeks</div></div>
             <div class="plan-stat"><div class="sv">${state.totalMi}</div><div class="sl">Total Miles</div></div>
             <div class="plan-stat"><div class="sv">${P_DISTS[state.dist].peakLR[state.level]}mi</div><div class="sl">Peak Long Run</div></div>
           </div>
         </div>
+        ${rwrBanner}
         ${paceGuideHTML}
         <div class="card" style="margin-bottom:12px">
           <div class="spaced" style="margin-bottom:0">
@@ -8818,9 +8982,78 @@
           </div>`;
         }).join('')}
         <div class="plan-tip"><strong>Warm-up &amp; cool-down:</strong> Easy/Long runs — start the first 5–10 min very easy; walk 3–5 min after. Intervals — 5–10 min easy jog + dynamic drills before, 5–10 min easy jog after. Tempo — 5–10 min easy + 2–3 short strides before, 5 min easy after. Static stretching always <em>after</em> your run, not before.<br><br><strong>General tips:</strong> Easy runs should feel fully conversational. Rest days are training — don't skip them. If you feel worn down, repeat a week rather than pushing through.</div>
+        <div class="card" style="margin-top:12px">
+          <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Save this plan</div>
+          <div class="field">
+            <label for="pSaveName">Plan name</label>
+            <input id="pSaveName" type="text" placeholder="e.g. Half Marathon — Fall 2026" value="${dist.label} Training Plan">
+          </div>
+          <div class="field">
+            <label for="pSaveDate">Start date</label>
+            <input id="pSaveDate" type="date" value="${todayISO()}">
+            <div class="muted" style="font-size:11px;margin-top:4px">Plan slots into the Monday on or before this date. Your selected days-of-week drive workout placement.</div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button style="flex:1" onclick="pSaveActivate()">Save &amp; Activate</button>
+            <button style="flex:1;background:var(--surface-2);color:var(--text);border:1px solid var(--border)" onclick="pSaveLibrary()">Save to Library</button>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:8px;line-height:1.4"><strong>Save &amp; Activate</strong>: makes this your active training plan starting on the chosen date. Home's Today's Workout tile will read from it. <strong>Save to Library</strong>: saves it as Available so you can activate it later.</div>
+        </div>
         <div style="height:8px"></div>
       `;
       out.scrollIntoView({ behavior:'smooth', block:'start' });
+    }
+
+    // Called by the Save & Activate button on the generated Run Planner
+    // output. Wraps the in-memory plan state into a training_plans row,
+    // confirms displacement of any currently-active plan, and activates.
+    async function pSaveActivate() {
+      const state = JSON.parse(localStorage.getItem('runPlanState_v1') || '{}');
+      const name  = (document.getElementById('pSaveName')?.value || '').trim();
+      const start = (document.getElementById('pSaveDate')?.value || '').trim() || todayISO();
+      if (!name) { toast('Give the plan a name first', true); return; }
+      if (!state.weeks_data) { toast('Generate a plan first', true); return; }
+      try {
+        // Check for currently active plan/program so we can confirm
+        // displacement in ONE prompt (both types get deactivated).
+        const [curPlan, curProg] = await Promise.all([
+          sbActiveTrainingPlan(true).catch(() => null),
+          sbActiveProgram(true).catch(() => null),
+        ]);
+        const displaces = [];
+        if (curPlan) displaces.push(`training plan "${curPlan.name}"`);
+        if (curProg) displaces.push(`program "${curProg.name}"`);
+        if (displaces.length) {
+          const msg = `Activate "${name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime from the Programs tab.`;
+          if (!confirm(msg)) return;
+          // Deactivate current active program (training plan gets swapped by sbSaveTrainingPlan).
+          if (curProg) {
+            await _sb.from('programs').update({ active: false }).eq('id', curProg.id);
+            invalidateActiveProgramCache();
+          }
+        }
+        const structure = convertRunPlanToTrainingPlan_(state, name, start);
+        const result = await sbSaveTrainingPlan({ name, structure, activate: true });
+        toast(`"${name}" is now your active plan`);
+        setTimeout(() => render('training-plan'), 700);
+      } catch (e) {
+        toast('Could not save: ' + (e.message || e), true);
+      }
+    }
+    async function pSaveLibrary() {
+      const state = JSON.parse(localStorage.getItem('runPlanState_v1') || '{}');
+      const name  = (document.getElementById('pSaveName')?.value || '').trim();
+      const start = (document.getElementById('pSaveDate')?.value || '').trim() || todayISO();
+      if (!name) { toast('Give the plan a name first', true); return; }
+      if (!state.weeks_data) { toast('Generate a plan first', true); return; }
+      try {
+        const structure = convertRunPlanToTrainingPlan_(state, name, start);
+        await sbSaveTrainingPlan({ name, structure, activate: false });
+        toast(`Saved "${name}" to your library`);
+        setTimeout(() => render('programs'), 700);
+      } catch (e) {
+        toast('Could not save: ' + (e.message || e), true);
+      }
     }
 
     // -------- Nav --------
