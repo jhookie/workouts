@@ -1754,10 +1754,16 @@
         return _activeProgramCache;
       }
       const uid = currentUser.id;
+      // v32.3 fix: multiple programs may be active simultaneously (one per
+      // modality). Fetch as array to avoid .maybeSingle() throwing when
+      // more than one row matches. Return the first (which the lift
+      // logger uses as the "primary" active program).
       const { data, error } = await _sb.from('programs')
-        .select('*').eq('user_id', uid).eq('active', true).is('archived_at', null).maybeSingle();
+        .select('*').eq('user_id', uid).eq('active', true).is('archived_at', null)
+        .order('plan_type', { ascending: true })
+        .limit(1);
       if (error) throw new Error(error.message);
-      _activeProgramCache = data || null;
+      _activeProgramCache = (data && data[0]) || null;
       _activeProgramCacheAt = Date.now();
       return _activeProgramCache;
     }
@@ -1797,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4';
+    const APP_VERSION = 'v32.4.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -5895,7 +5901,7 @@
         const [progsRes, plansRes] = await Promise.all([
           sbListPrograms(),
           _sb.from('training_plans')
-            .select('id,name,start_date,end_date,structure,notes,active,archived_at')
+            .select('id,name,plan_type,start_date,end_date,structure,notes,active,archived_at')
             .eq('user_id', uid)
             .order('active', { ascending: false })
             .order('created_at', { ascending: false }),
@@ -6664,13 +6670,22 @@
     async function sbActiveTrainingPlan(force = false) {
       if (!force && _activeTrainingPlanCache) return _activeTrainingPlanCache;
       const uid = currentUser.id;
+      // v32.3: multiple plans may be active simultaneously (one per
+      // modality). This function returns the FIRST one for backwards
+      // compat with legacy consumers. New code should use
+      // sbListActiveWorkoutItems() for the full list.
+      // NOTE: cannot use .maybeSingle() anymore — since v32.3 the query
+      // may legitimately return multiple rows and .maybeSingle() throws
+      // in that case. Fetch as array and take the first.
       const { data, error } = await _sb.from('training_plans')
-        .select('id,name,start_date,end_date,structure,notes,active')
+        .select('id,name,plan_type,start_date,end_date,structure,notes,active')
         .eq('user_id', uid).eq('active', true).is('archived_at', null)
-        .maybeSingle();
+        .order('plan_type', { ascending: true })
+        .limit(1);
       if (error) throw new Error(error.message);
-      _activeTrainingPlanCache = data;
-      return data;
+      const row = (data && data[0]) || null;
+      _activeTrainingPlanCache = row;
+      return row;
     }
 
     // Management helpers for training plans — mirror the programs
@@ -6850,7 +6865,7 @@
       let plan;
       try {
         const { data, error } = await _sb.from('training_plans')
-          .select('id,name,start_date,end_date,structure,notes,active,archived_at')
+          .select('id,name,plan_type,start_date,end_date,structure,notes,active,archived_at')
           .eq('id', id).maybeSingle();
         if (error) throw new Error(error.message);
         plan = data;
