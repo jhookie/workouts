@@ -158,6 +158,12 @@
     .plan-dow-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; }
     .plan-dow-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 0; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; font-family: inherit; transition: border-color 0.15s, background 0.15s, color 0.15s; }
     .plan-dow-btn.sel { border-color: var(--primary); background: rgba(36,80,196,0.10); color: var(--primary); }
+    /* Checkbox row used inside plan-slider-row (Run Planner options). */
+    .plan-checkbox-row { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+    .plan-checkbox-row input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; flex-shrink: 0; accent-color: var(--primary); }
+    .plan-checkbox-body { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .plan-checkbox-title { font-size: 14px; font-weight: 600; color: var(--text); }
+    .plan-checkbox-sub { font-size: 12px; color: var(--muted); line-height: 1.4; }
     .plan-dist-icon { font-size: 18px; margin-bottom: 3px; }
     .plan-dist-name { font-size: 12px; font-weight: 700; display: block; }
     .plan-dist-sub { font-size: 10px; color: var(--muted); display: block; margin-top: 1px; }
@@ -1688,7 +1694,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.1';
+    const APP_VERSION = 'v32.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3202,7 +3208,7 @@
       // 'plan' (Run Planner) is now a sub-view of Programs; 'training-plan'
       // (imported plan viewer) is reachable from multiple places but
       // conceptually belongs to Programs too.
-      const programsSubviews = new Set(['plan', 'training-plan']);
+      const programsSubviews = new Set(['plan', 'training-plan', 'training-plan-detail']);
       const navView = isLoggerView ? 'home'
                     : programsSubviews.has(view) ? 'programs'
                     : view;
@@ -3231,6 +3237,7 @@
       else if (view === 'edit-widgets') await renderEditWidgets(app);
       else if (view === 'training-plan') await renderTrainingPlan(app);
       else if (view === 'plan-log-lift') await renderPlanLogLift(app);
+      else if (view === 'training-plan-detail') await renderTrainingPlanDetail(app);
       else if (view === 'lift-edit') await renderLiftEdit(app);
       else if (view === 'lift-freeform') await renderLiftFreeform(app);
       else if (view === 'run-edit') await renderRunEdit(app);
@@ -5761,20 +5768,35 @@
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton' }));
       app.appendChild(skel);
 
-      // Fetch both concurrently — training plans and programs are separate
-      // tables today, but for the user this is all "my workout stuff."
-      let programs, plan;
+      // Fetch programs + ALL training plans (v32.2 fix — previously only
+      // the active plan was fetched, so "Save to Library" plans were
+      // invisible to the user).
+      let programs, allPlans;
       try {
-        [programs, plan] = await Promise.all([
+        const uid = currentUser.id;
+        const [progsRes, plansRes] = await Promise.all([
           sbListPrograms(),
-          sbActiveTrainingPlan().catch(() => null),
+          _sb.from('training_plans')
+            .select('id,name,start_date,end_date,structure,notes,active,archived_at')
+            .eq('user_id', uid)
+            .order('active', { ascending: false })
+            .order('created_at', { ascending: false }),
         ]);
+        programs = progsRes;
+        if (plansRes.error) throw new Error(plansRes.error.message);
+        allPlans = plansRes.data || [];
       } catch (e) {
         skel.remove();
         app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
         return;
       }
       skel.remove();
+
+      // Split training plans by state
+      const activePlan     = allPlans.find(p => p.active && !p.archived_at) || null;
+      const availablePlans = allPlans.filter(p => !p.active && !p.archived_at);
+      const archivedPlans  = allPlans.filter(p => !!p.archived_at);
+      const plan = activePlan; // keep the variable name from the older code path
 
       if (_programsDetailId) {
         const prog = programs.find(p => p.id === _programsDetailId);
@@ -5788,7 +5810,8 @@
       const upcoming = programs.filter(p => !p.active && !p.archived);
       const archived = programs.filter(p => p.archived);
 
-      const hasAnyMine = !!plan || active.length || upcoming.length || archived.length;
+      const hasAnyMine = !!plan || active.length || upcoming.length || archived.length
+                       || availablePlans.length || archivedPlans.length;
 
       // --- My plans ---
       // Unified list of the user's training plans (date-anchored) + programs
@@ -5807,21 +5830,25 @@
           active.forEach(p => mineWrap.appendChild(programCard_(p)));
         }
 
-        if (upcoming.length) {
+        if (upcoming.length || availablePlans.length) {
           mineWrap.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; margin: 8px 4px 6px;' }, 'Available'));
+          // Training plans first (usually more recent), then programs.
+          availablePlans.forEach(pl => mineWrap.appendChild(planCard_(pl)));
           upcoming.forEach(p => mineWrap.appendChild(programCard_(p)));
         }
 
-        if (archived.length) {
+        const totalArchived = archived.length + archivedPlans.length;
+        if (totalArchived) {
           // Collapsible archived section — heavy users may accumulate many
           // archived programs. Header + chevron toggles the group.
           const archHeader = el('button', {
             style: 'background: transparent; border: none; padding: 8px 4px 6px; margin: 0; width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; cursor: pointer; color: var(--muted); font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase;',
           }, [
-            el('span', {}, `Archived (${archived.length})`),
+            el('span', {}, `Archived (${totalArchived})`),
             el('span', { id: 'archChevron', style: 'font-size: 12px; transition: transform 0.15s ease;' }, '›'),
           ]);
           const archBody = el('div', { id: 'archBody', style: 'display: none;' });
+          archivedPlans.forEach(pl => archBody.appendChild(planCard_(pl)));
           archived.forEach(p => archBody.appendChild(programCard_(p)));
           archHeader.onclick = () => {
             const isOpen = archBody.style.display !== 'none';
@@ -6058,9 +6085,16 @@
         startDate ? `${startDate} → ${endDate}` : '',
       ].filter(Boolean).join(' · ');
 
+      const isArchived = !!plan.archived_at;
+      // Active plans open the training-plan viewer (which shows the schedule).
+      // Inactive/archived plans need their own management screen since the
+      // training-plan viewer only loads the ACTIVE plan.
+      const onClickHandler = plan.active
+        ? () => render('training-plan')
+        : () => { _trainingPlanDetailId = plan.id; render('training-plan-detail'); };
       return el('div', {
         class: 'card program-card',
-        onclick: () => render('training-plan'),
+        onclick: onClickHandler,
       }, [
         el('div', { class: 'program-row' }, [
           el('div', {}, [
@@ -6069,7 +6103,9 @@
             el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, meta || '—'),
             plan.notes ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; font-style: italic;' }, plan.notes) : null,
           ]),
-          plan.active ? el('span', { class: 'program-badge active' }, 'ACTIVE') : null,
+          plan.active
+            ? el('span', { class: 'program-badge active' }, 'ACTIVE')
+            : (isArchived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED') : null),
         ]),
       ]);
     }
@@ -6496,6 +6532,7 @@
     // Management helpers for training plans — mirror the programs
     // archive/delete/activate flow. Cache invalidation ensures the
     // Home widget + Programs banner update after a change.
+    let _trainingPlanDetailId = null; // id of plan being viewed from card tap
     function invalidateActiveTrainingPlanCache() { _activeTrainingPlanCache = null; }
     async function sbArchiveTrainingPlan(id) {
       const { error } = await _sb.from('training_plans')
@@ -6629,6 +6666,136 @@
     function firstUpcomingPlanDay_(plan, fromISO) {
       const days = (plan && plan.structure && plan.structure.days) || [];
       return days.find(d => d.date >= fromISO) || null;
+    }
+
+    // Detail screen for an INACTIVE or ARCHIVED training plan.
+    // Reached by tapping a plan card in Programs → My Plans. Shows the
+    // plan's metadata + Activate / Archive / Delete buttons. The active
+    // plan uses renderTrainingPlan (day-by-day viewer) instead.
+    async function renderTrainingPlanDetail(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Training plan')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => { _trainingPlanDetailId = null; render('programs'); },
+      }, '← Back to Programs'));
+
+      const id = _trainingPlanDetailId;
+      if (!id) {
+        app.appendChild(el('div', { class: 'card' }, 'No plan selected.'));
+        return;
+      }
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 100px;' }));
+      app.appendChild(skel);
+
+      let plan;
+      try {
+        const { data, error } = await _sb.from('training_plans')
+          .select('id,name,start_date,end_date,structure,notes,active,archived_at')
+          .eq('id', id).maybeSingle();
+        if (error) throw new Error(error.message);
+        plan = data;
+      } catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      if (!plan) {
+        app.appendChild(el('div', { class: 'card' }, 'Plan not found — it may have been deleted.'));
+        return;
+      }
+
+      const s = plan.structure || {};
+      const cfg = s.config || {};
+      const startDate = cfg.start_date || plan.start_date;
+      const endDate   = cfg.end_date   || plan.end_date;
+      const totalWeeks = cfg.total_weeks || (Array.isArray(s.days) ? Math.ceil(s.days.length / 7) : 0);
+      const sessionCount = Array.isArray(s.days) ? s.days.reduce((n, d) => n + (d.sessions||[]).length, 0) : 0;
+      const isArchived = !!plan.archived_at;
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;' }, [
+          el('div', { style: 'flex: 1;' }, [
+            el('h2', { style: 'margin-bottom: 4px;' }, plan.name),
+            el('div', { class: 'muted', style: 'font-size: 13px;' },
+              `${startDate} → ${endDate}${totalWeeks ? ' · ' + totalWeeks + ' weeks' : ''}${sessionCount ? ' · ' + sessionCount + ' sessions' : ''}`),
+          ]),
+          isArchived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED') : null,
+        ]),
+        plan.notes ? el('div', { class: 'muted', style: 'margin-top: 10px; font-size: 13px; font-style: italic;' }, plan.notes) : null,
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;' }, [
+          el('button', {
+            style: 'flex: 1;',
+            onclick: async () => {
+              try {
+                // Confirm-when-displacing (same pattern as Programs).
+                const [curPlan, curProg] = await Promise.all([
+                  sbActiveTrainingPlan(true).catch(() => null),
+                  sbActiveProgram(true).catch(() => null),
+                ]);
+                const displaces = [];
+                if (curPlan && curPlan.id !== plan.id) displaces.push(`training plan "${curPlan.name}"`);
+                if (curProg) displaces.push(`program "${curProg.name}"`);
+                if (displaces.length) {
+                  const msg = `Activate "${plan.name}"?\n\nThis will deactivate your current ${displaces.join(' and ')}. You can reactivate ${displaces.length > 1 ? 'them' : 'it'} anytime.`;
+                  if (!confirm(msg)) return;
+                  if (curProg) {
+                    await _sb.from('programs').update({ active: false }).eq('id', curProg.id);
+                    invalidateActiveProgramCache();
+                  }
+                }
+                await sbActivateTrainingPlan(plan.id);
+                toast(`"${plan.name}" is now your active plan`);
+                _trainingPlanDetailId = null;
+                setTimeout(() => render('training-plan'), 600);
+              } catch (e) { toast('Could not activate: ' + e.message, true); }
+            },
+          }, 'Activate'),
+          !isArchived ? el('button', {
+            style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+            onclick: async () => {
+              if (!confirm(`Archive "${plan.name}"? You can reactivate it later.`)) return;
+              try {
+                await sbArchiveTrainingPlan(plan.id);
+                toast('Archived');
+                _trainingPlanDetailId = null;
+                setTimeout(() => render('programs'), 500);
+              } catch (e) { toast('Could not archive: ' + e.message, true); }
+            },
+          }, 'Archive') : null,
+          el('button', {
+            style: 'flex: 1; background: var(--surface-2); color: #d97a7a; border: 1px solid var(--border);',
+            onclick: async () => {
+              if (!confirm(`Delete "${plan.name}" permanently? Workouts you logged under this plan are kept, but the plan itself is gone.`)) return;
+              try {
+                await sbDeleteTrainingPlan(plan.id);
+                toast('Deleted');
+                _trainingPlanDetailId = null;
+                setTimeout(() => render('programs'), 500);
+              } catch (e) { toast('Could not delete: ' + e.message, true); }
+            },
+          }, 'Delete'),
+        ]),
+      ]));
+
+      // Quick preview: first 3 sessions to give the user a sense of the plan.
+      if (Array.isArray(s.days) && s.days.length) {
+        const preview = el('div', { class: 'card' }, [
+          el('div', { style: 'font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px;' }, 'First few sessions'),
+        ]);
+        s.days.slice(0, 3).forEach(day => {
+          (day.sessions || []).forEach(sess => {
+            preview.appendChild(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;' }, [
+              el('div', { class: 'muted', style: 'font-size: 11px;' }, `${day.date} · ${day.dow || ''}`),
+              el('div', { style: 'font-weight: 600; margin-top: 2px;' }, sess.name || sess.workout_kind || ''),
+              sess.target_miles ? el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' }, `${sess.target_miles} mi`) : null,
+            ]));
+          });
+        });
+        app.appendChild(preview);
+      }
     }
 
     async function renderTrainingPlan(app) {
@@ -8799,13 +8966,15 @@
               `).join('')}
             </div>
           </div>
-          <div class="plan-optional" id="pRWRToggle" onclick="this.classList.toggle('active');document.getElementById('pRWRFields').classList.toggle('vis');pRWRUpdateState()">
-            <span style="font-size:18px">🚶</span>
-            <div class="plan-opt-text"><strong>Use walk breaks (Galloway method)</strong><small>Great for beginners, returners, and long-distance base building</small></div>
-            <span class="plan-opt-arrow">›</span>
-          </div>
-          <div class="plan-race-fields" id="pRWRFields">
-            <div class="plan-race-col" style="flex:1">
+          <div class="plan-slider-row">
+            <label class="plan-checkbox-row" for="pRWRToggle">
+              <input type="checkbox" id="pRWRToggle" onchange="pRWRToggleChanged()">
+              <span class="plan-checkbox-body">
+                <span class="plan-checkbox-title">🚶  Add walk breaks</span>
+                <span class="plan-checkbox-sub">Alternate running and walking on the minute. Good for beginners, returners, or lower-impact base building.</span>
+              </span>
+            </label>
+            <div id="pRWRFields" style="display:none;margin-top:10px">
               <label>Run : Walk ratio</label>
               <select id="pRWRRatio">
                 <option value="2:1">2 min run / 1 min walk</option>
@@ -8845,10 +9014,12 @@
       // Restore day-of-week selections into module state (used by planGenerate)
       window.planSelectedDows = Array.isArray(savedState.dows) ? savedState.dows.slice() : [];
 
-      // Restore Run-Walk-Run toggle + ratio if the user had it enabled
+      // Restore walk-break checkbox + ratio if the user had it enabled
       if (savedState.runWalk) {
-        document.getElementById('pRWRToggle')?.classList.add('active');
-        document.getElementById('pRWRFields')?.classList.add('vis');
+        const cb = document.getElementById('pRWRToggle');
+        if (cb) cb.checked = true;
+        const fields = document.getElementById('pRWRFields');
+        if (fields) fields.style.display = 'block';
         if (savedState.runWalkRatio) {
           const r = document.getElementById('pRWRRatio');
           if (r) r.value = savedState.runWalkRatio;
@@ -8859,10 +9030,13 @@
       if (savedState.weeks_data) pShowOutput(savedState);
     }
 
-    // Called when user toggles the Run-Walk-Run collapsible.
-    // No-op right now (form values are read directly at generate time);
-    // kept as a hook in case we later want to preview the change.
-    function pRWRUpdateState() {}
+    // Called when the walk-break checkbox changes. Reveals/hides the
+    // ratio picker.
+    function pRWRToggleChanged() {
+      const cb = document.getElementById('pRWRToggle');
+      const fields = document.getElementById('pRWRFields');
+      if (cb && fields) fields.style.display = cb.checked ? 'block' : 'none';
+    }
 
     // Toggle a day-of-week checkbox in the Run Planner form. Mon=0..Sun=6.
     function planToggleDow(i) {
@@ -8899,7 +9073,7 @@
         totalMi += wk.total;
       }
       const dows = Array.isArray(window.planSelectedDows) ? window.planSelectedDows.slice().sort() : [];
-      const runWalk = document.getElementById('pRWRToggle')?.classList.contains('active') || false;
+      const runWalk = !!document.getElementById('pRWRToggle')?.checked;
       const runWalkRatio = runWalk ? (document.getElementById('pRWRRatio')?.value || '4:1') : null;
       const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, runWalk, runWalkRatio, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
       try { localStorage.setItem('runPlanState_v1', JSON.stringify(state)); } catch(e) {}
@@ -8938,8 +9112,8 @@
           <div style="display:flex;gap:12px;align-items:center">
             <div style="font-size:24px">🚶</div>
             <div>
-              <div style="font-weight:700;font-size:14px;color:var(--primary)">Run-Walk-Run · ${state.runWalkRatio || '4:1'}</div>
-              <div class="muted" style="font-size:12px;margin-top:2px;line-height:1.4">Apply this ratio to every run session in the plan. Alternate between running and walking on the minute — your total distance stays the same but joint impact drops and recovery improves.</div>
+              <div style="font-weight:700;font-size:14px;color:var(--primary)">Walk breaks · ${state.runWalkRatio || '4:1'} ratio</div>
+              <div class="muted" style="font-size:12px;margin-top:2px;line-height:1.4">Apply this ratio to every run session. Alternate between running and walking on the minute — your total distance stays the same but joint impact drops and recovery improves.</div>
             </div>
           </div>
         </div>` : '';
