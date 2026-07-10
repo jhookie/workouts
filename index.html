@@ -1797,7 +1797,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.3';
+    const APP_VERSION = 'v32.4';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -6255,6 +6255,25 @@
       const exCount = weeks.reduce((sum, w) =>
         sum + Object.values(w.days || {}).reduce((s2, arr) => s2 + (arr ? arr.length : 0), 0), 0);
 
+      const progType = p.plan_type || 'lift';
+      const progTypeSel = el('select', {
+        style: 'width: auto; padding: 4px 24px 4px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;',
+      }, [
+        el('option', { value: 'run',     ...(progType==='run'?{selected:true}:{}) }, 'RUN'),
+        el('option', { value: 'lift',    ...(progType==='lift'?{selected:true}:{}) }, 'LIFT'),
+        el('option', { value: 'cycle',   ...(progType==='cycle'?{selected:true}:{}) }, 'CYCLE'),
+        el('option', { value: 'general', ...(progType==='general'?{selected:true}:{}) }, 'GENERAL'),
+      ]);
+      progTypeSel.addEventListener('change', async () => {
+        const newType = progTypeSel.value;
+        try {
+          await sbUpdatePlanType('programs', p.id, newType);
+          toast(`Reclassified as ${newType.toUpperCase()}`);
+        } catch (e) {
+          toast('Could not reclassify: ' + e.message, true);
+          progTypeSel.value = progType;
+        }
+      });
       // Header card
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'program-row' }, [
@@ -6266,6 +6285,13 @@
           ]),
           p.active ? el('span', { class: 'program-badge active' }, 'ACTIVE')
                    : (p.archived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED') : null),
+        ]),
+
+        el('div', {
+          style: 'display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px;',
+        }, [
+          el('span', { class: 'muted', style: 'font-size: 12px; font-weight: 600;' }, 'Program type:'),
+          progTypeSel,
         ]),
 
         // Action buttons
@@ -6680,6 +6706,20 @@
       invalidateActiveTrainingPlanCache();
     }
 
+    // Reclassify a training plan or program between plan_types.
+    // v32.4: gives users a way to say "this hybrid plan is really a run
+    // plan; let it coexist with a lift program." Doesn't touch the plan's
+    // content — only the metadata that drives activation-conflict rules.
+    async function sbUpdatePlanType(table, id, newType) {
+      const valid = ['run', 'lift', 'cycle', 'general'];
+      if (!valid.includes(newType)) throw new Error('Invalid plan type: ' + newType);
+      const { error } = await _sb.from(table)
+        .update({ plan_type: newType }).eq('id', id);
+      if (error) throw new Error(error.message);
+      invalidateActiveTrainingPlanCache();
+      invalidateActiveProgramCache();
+    }
+
     // Save a training plan generated from a builder (Run Planner, etc.).
     // Returns { id, displacedNames[] }. If activate=true, deactivates any
     // conflicting-type actives first (v32.3 rules) and reports their names.
@@ -6834,6 +6874,25 @@
       const sessionCount = Array.isArray(s.days) ? s.days.reduce((n, d) => n + (d.sessions||[]).length, 0) : 0;
       const isArchived = !!plan.archived_at;
 
+      const currentType = plan.plan_type || 'general';
+      const typeSelect2 = el('select', {
+        style: 'width: auto; padding: 4px 24px 4px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;',
+      }, [
+        el('option', { value: 'run',     ...(currentType==='run'?{selected:true}:{}) }, 'RUN'),
+        el('option', { value: 'lift',    ...(currentType==='lift'?{selected:true}:{}) }, 'LIFT'),
+        el('option', { value: 'cycle',   ...(currentType==='cycle'?{selected:true}:{}) }, 'CYCLE'),
+        el('option', { value: 'general', ...(currentType==='general'?{selected:true}:{}) }, 'GENERAL'),
+      ]);
+      typeSelect2.addEventListener('change', async () => {
+        const newType = typeSelect2.value;
+        try {
+          await sbUpdatePlanType('training_plans', plan.id, newType);
+          toast(`Reclassified as ${newType.toUpperCase()}`);
+        } catch (e) {
+          toast('Could not reclassify: ' + e.message, true);
+          typeSelect2.value = currentType;
+        }
+      });
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;' }, [
           el('div', { style: 'flex: 1;' }, [
@@ -6844,6 +6903,12 @@
           isArchived ? el('span', { class: 'program-badge archived' }, 'ARCHIVED') : null,
         ]),
         plan.notes ? el('div', { class: 'muted', style: 'margin-top: 10px; font-size: 13px; font-style: italic;' }, plan.notes) : null,
+        el('div', {
+          style: 'display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px;',
+        }, [
+          el('span', { class: 'muted', style: 'font-size: 12px; font-weight: 600;' }, 'Plan type:'),
+          typeSelect2,
+        ]),
         el('div', { style: 'display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;' }, [
           el('button', {
             style: 'flex: 1;',
@@ -6958,10 +7023,37 @@
       // shape as programs so users don't have to learn two flows.
       const startDate = cfg.start_date || plan.start_date;
       const endDate   = cfg.end_date   || plan.end_date;
+      const currentType = plan.plan_type || 'general';
+      const typeSelect = el('select', {
+        style: 'width: auto; padding: 4px 24px 4px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;',
+      }, [
+        el('option', { value: 'run',     ...(currentType==='run'?{selected:true}:{}) }, 'RUN'),
+        el('option', { value: 'lift',    ...(currentType==='lift'?{selected:true}:{}) }, 'LIFT'),
+        el('option', { value: 'cycle',   ...(currentType==='cycle'?{selected:true}:{}) }, 'CYCLE'),
+        el('option', { value: 'general', ...(currentType==='general'?{selected:true}:{}) }, 'GENERAL'),
+      ]);
+      typeSelect.addEventListener('change', async () => {
+        const newType = typeSelect.value;
+        try {
+          await sbUpdatePlanType('training_plans', plan.id, newType);
+          toast(`Plan reclassified as ${newType.toUpperCase()}`);
+        } catch (e) {
+          toast('Could not reclassify: ' + e.message, true);
+          typeSelect.value = currentType;
+        }
+      });
       app.appendChild(el('div', { class: 'card' }, [
         el('h2', { style: 'margin-bottom: 4px;' }, plan.name),
         el('div', { class: 'muted', style: 'font-size: 13px;' },
           `${startDate} → ${endDate}${cfg.total_weeks ? ' · ' + cfg.total_weeks + ' weeks' : ''}`),
+        el('div', {
+          style: 'display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px;',
+        }, [
+          el('span', { class: 'muted', style: 'font-size: 12px; font-weight: 600;' }, 'Plan type:'),
+          typeSelect,
+          el('span', { class: 'muted', style: 'font-size: 11px; flex: 1;' },
+            'Controls what other plans can coexist with this one'),
+        ]),
         el('div', { style: 'display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;' }, [
           el('button', {
             style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
