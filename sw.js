@@ -1,5 +1,5 @@
 // Simple offline-first service worker: cache shell, network-first for API.
-const CACHE = 'loggbok-v32-4-5';
+const CACHE = 'loggbok-v32-4-6';
 const SHELL = [
   './',
   './index.html',

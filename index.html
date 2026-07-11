@@ -1803,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.5';
+    const APP_VERSION = 'v32.4.6';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7466,6 +7466,26 @@
         return;
       }
       const { session, date } = ref;
+
+      // v32.4.6: check if this session was already logged. If so, route
+      // to the read-only session detail regardless of entry point. This
+      // is the "single source of truth" version of the check that used
+      // to live in renderLift and the Today's Workout row — putting it
+      // here means EVERY path into plan-log-lift gets it (session card
+      // "Start logging" button, Today's Workout row, Lift pill, etc.).
+      try {
+        const existing = await sbGetLiftSession(date, session.name);
+        if (existing) {
+          _liftSessionRef = { date, day: session.name };
+          // Preserve auto-route return-to (if set) or fall through to
+          // the current _previousView so the session-detail back button
+          // routes sensibly.
+          if (!_liftAutoRouteReturnTo && _previousView && !['plan-log-lift', 'lift-session'].includes(_previousView)) {
+            _liftAutoRouteReturnTo = _previousView;
+          }
+          return render('lift-session');
+        }
+      } catch (e) { /* fall through — show the empty log form */ }
 
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, session.name || 'Log workout'),
