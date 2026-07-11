@@ -1803,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.3';
+    const APP_VERSION = 'v32.4.4';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -4023,14 +4023,21 @@
     // the training plan auto-route and uses the program's lift logger
     // instead. Cleared after one use.
     let _bypassPlanAutoRouteForLift = false;
+    // v32.4.4: remembers where the user came from BEFORE renderLift
+    // auto-routed to plan-log-lift, so plan-log-lift's back button can
+    // return there instead of routing back to renderLift and looping.
+    let _liftAutoRouteReturnTo = null;
 
     async function renderLift(app) {
+      // Capture the real caller before any auto-routes fire. renderLift
+      // gets called via render('lift'), which has already updated
+      // _previousView to whatever was current before Lift (usually 'home').
+      const preLiftView = _previousView;
+
       // If a training plan is active and today has a lift session, route the
-      // user straight into the plan-based logger. This makes tapping "Lift"
-      // from Home do the right thing for plan-users (they don't want the
-      // Push/Pull program logger; they want today's programmed session).
-      // BUT: when the user tapped a specific PROGRAM row on Home, we bypass
-      // this and let them log against that program.
+      // user straight into the plan-based logger. BUT: when the user tapped
+      // a specific PROGRAM row on Home, we bypass this and let them log
+      // against that program.
       const bypass = _bypassPlanAutoRouteForLift;
       _bypassPlanAutoRouteForLift = false;
       if (!bypass) {
@@ -4042,23 +4049,50 @@
             if (dayEntry) {
               const liftSessIdx = (dayEntry.sessions || []).findIndex(s => s.type === 'lift');
               if (liftSessIdx !== -1) {
+                const sessionName = dayEntry.sessions[liftSessIdx].name;
+                // v32.4.4: if the user ALREADY logged this session today,
+                // route to the read-only session detail (with an Edit CTA)
+                // instead of the empty log form. Better matches the mental
+                // model — "I already did that."
+                let existing = null;
+                try { existing = await sbGetLiftSession(today, sessionName); }
+                catch (e) { existing = null; }
+                if (existing) {
+                  _liftSessionRef = { date: today, day: sessionName };
+                  _liftAutoRouteReturnTo = preLiftView;
+                  return render('lift-session');
+                }
                 _planLogRef = {
                   date: today,
                   sessionIndex: liftSessIdx,
                   session: dayEntry.sessions[liftSessIdx],
                   dayEntry,
                 };
+                _liftAutoRouteReturnTo = preLiftView;
                 return render('plan-log-lift');
               }
             }
           }
         } catch (e) { /* fall through to legacy program-based lift logger */ }
       }
+      _liftAutoRouteReturnTo = null;
 
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Log Lift'),
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
+      // v32.4.4: Back button when the user came here directly (e.g. from
+      // the Home Push/Pull program row, which bypasses the plan auto-route).
+      const backToLift = preLiftView && !['lift'].includes(preLiftView) ? preLiftView : 'home';
+      const backLiftLabel = backToLift === 'home' ? '← Back to Home'
+                          : backToLift === 'calendar' ? '← Back to Calendar'
+                          : backToLift === 'programs' ? '← Back to Programs'
+                          : '← Back';
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render(backToLift),
+      }, backLiftLabel));
 
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 80px;' }));
       app.appendChild(skel);
@@ -5609,11 +5643,22 @@
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Lift session'),
       ]));
+      // v32.4.4: prefer auto-route return-to (Home users who tapped Lift
+      // after already logging today land here), then previous view.
+      const autoBack = _liftAutoRouteReturnTo;
+      _liftAutoRouteReturnTo = null;
+      const backLS = autoBack
+                    || (_previousView && !['lift-session', 'lift'].includes(_previousView) ? _previousView : null)
+                    || 'calendar';
+      const backLSLabel = backLS === 'home' ? '← Back to Home'
+                        : backLS === 'programs' ? '← Back to Programs'
+                        : backLS === 'training-plan' ? '← Back to plan'
+                        : '← Back to calendar';
       app.appendChild(el('button', {
         class: 'btn-link',
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
-        onclick: () => { _liftSessionRef = null; render('calendar'); },
-      }, '← Back to calendar'));
+        onclick: () => { _liftSessionRef = null; render(backLS); },
+      }, backLSLabel));
 
       if (!ref) {
         app.appendChild(el('div', { class: 'card' }, 'No session selected.'));
@@ -7414,12 +7459,15 @@
         el('h1', {}, session.name || 'Log workout'),
         el('span', { class: 'date' }, fmtDateLong(new Date(date + 'T12:00:00'))),
       ]));
-      // v32.4.3: Back button returns to the view the user came from.
-      // Home users jumped straight here from Today's Workout, so their
-      // back button should go to Home — not the plan viewer they never
-      // saw.
-      const backTo2 = _previousView && !['plan-log-lift'].includes(_previousView)
-                     ? _previousView : 'training-plan';
+      // v32.4.4: Back button prefers the auto-route return-to (real caller
+      // when Home → Lift auto-routed through renderLift), then previous
+      // view, then plan viewer as fallback. Filters out 'lift' to avoid
+      // routing loops through renderLift's auto-route.
+      const autoRouteBack = _liftAutoRouteReturnTo;
+      _liftAutoRouteReturnTo = null;
+      let backTo2 = autoRouteBack
+                  || (_previousView && !['plan-log-lift', 'lift'].includes(_previousView) ? _previousView : null)
+                  || 'training-plan';
       const backLabel2 = backTo2 === 'home' ? '← Back to Home'
                        : backTo2 === 'calendar' ? '← Back to Calendar'
                        : '← Back to plan';
