@@ -1771,12 +1771,21 @@
         .update({ active: false, archived_at: new Date().toISOString() })
         .eq('id', id);
       if (error) throw new Error(error.message);
+      // v33.2 fix (Bug #2): clear the legacy loadProgram cache too, so the
+      // Log Lift "Today's Session" pill doesn't keep rendering the just-
+      // archived program's block/week/day.
+      invalidateActiveProgramCache();
+      programCache = null;
+      try { localStorage.removeItem(PROG_KEY); } catch (e) {}
       return { ok: true };
     }
 
     async function sbDeleteProgram(id) {
       const { error } = await _sb.from('programs').delete().eq('id', id);
       if (error) throw new Error(error.message);
+      invalidateActiveProgramCache();
+      programCache = null;
+      try { localStorage.removeItem(PROG_KEY); } catch (e) {}
       return { ok: true };
     }
 
@@ -1840,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.1';
+    const APP_VERSION = 'v33.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2368,15 +2377,43 @@
       const pulls = pullsR.data || [];
 
       // --- Available types (only tabs with actual data) ---
+      // v33.2 (Bug #8): also gate tabs by the user's chosen modalities so
+      // residual legacy data (e.g. pull-ups logged before the modality
+      // was folded into Strength) doesn't clutter Analytics with tabs
+      // the user has explicitly deselected. When modalities are unset
+      // (pre-onboarding users), show everything with data so nothing
+      // silently disappears.
+      const profileForAnalytics = await sbLoadUserProfile().catch(() => null);
+      const userMods = new Set((profileForAnalytics && Array.isArray(profileForAnalytics.modalities)) ? profileForAnalytics.modalities : []);
+      const modsUnset = userMods.size === 0;
+      const modAllows = (id) => modsUnset || userMods.has(id);
+
       const availableTypes = ['all'];
-      if (runs.length)  availableTypes.push('run');
-      if (walks.length) availableTypes.push('walk');
+      if (runs.length  && modAllows('running'))  availableTypes.push('run');
+      if (walks.length && modAllows('walking'))  availableTypes.push('walk');
       const actTypeSet = new Set(acts.map(a => a.activity_type));
-      if (actTypeSet.has('cycling'))  availableTypes.push('ride');
-      if (actTypeSet.has('hiking'))   availableTypes.push('hike');
-      if (actTypeSet.has('swimming')) availableTypes.push('swim');
-      if (lifts.length) availableTypes.push('lift');
-      if (pulls.length) availableTypes.push('pullups');
+      if (actTypeSet.has('cycling')  && modAllows('cycling'))  availableTypes.push('ride');
+      if (actTypeSet.has('hiking')   && modAllows('hiking'))   availableTypes.push('hike');
+      if (actTypeSet.has('swimming') && modAllows('swimming')) availableTypes.push('swim');
+      if (lifts.length && modAllows('strength'))  availableTypes.push('lift');
+      // Pull-Ups is deprecated as a standalone modality (v20.2). Only surface
+      // the Analytics tab when the user has legacy 'pullups' modality still
+      // selected AND has residual data. Otherwise the historical data folds
+      // into Strength via lift_sessions and doesn't need its own tab.
+      if (pulls.length && userMods.has('pullups')) availableTypes.push('pullups');
+
+      // Compose a human-readable list of the distance-bearing modalities the
+      // user actually has — replaces the vague blanket "activities" label
+      // in the Total-miles caption on the All tab (v33.2 Bug #7).
+      const distanceParts = [];
+      if (runs.length  && modAllows('running')) distanceParts.push('runs');
+      if (walks.length && modAllows('walking')) distanceParts.push('walks');
+      if (actTypeSet.has('cycling')  && modAllows('cycling'))  distanceParts.push('rides');
+      if (actTypeSet.has('hiking')   && modAllows('hiking'))   distanceParts.push('hikes');
+      if (actTypeSet.has('swimming') && modAllows('swimming')) distanceParts.push('swims');
+      const distanceCaption = distanceParts.length
+        ? distanceParts.join(' + ')
+        : 'across all distance workouts';
 
       // ---- Helpers ----
       const roundTo = (n, d) => Math.round(n * Math.pow(10, d)) / Math.pow(10, d);
@@ -2502,12 +2539,23 @@
         };
         let totalVolume = 0;
         let totalSets = 0;
-        const perExercise = {}; // { name: { volume, sessions, maxWeight, mostRecentDate } }
+        const perExercise = {}; // { normKey: { displayName, volume, sessions, maxWeight, mostRecentDate } }
         lifts.forEach(sess => {
           (sess.exercises || []).forEach(ex => {
             const name = (ex.name || '').trim();
             if (!name) return;
-            const bucket = perExercise[name] || (perExercise[name] = { volume: 0, sets: 0, sessions: new Set(), maxWeight: 0, lastDate: sess.date });
+            // v33.2 fix (Bug #3): fold together entries that differ only
+            // by abbreviation, punctuation, or superset suffixes so a
+            // user's "DB Bench" and "Dumbbell Bench Press" don't split
+            // into two rows in Top Exercises. Bucket by normalized key,
+            // display the longest observed name as canonical.
+            const normKey = normalizeExName_(name);
+            let bucket = perExercise[normKey];
+            if (!bucket) {
+              bucket = perExercise[normKey] = { displayName: name, volume: 0, sets: 0, sessions: new Set(), maxWeight: 0, lastDate: sess.date };
+            } else if (name.length > bucket.displayName.length) {
+              bucket.displayName = name; // prefer the fuller spelling for display
+            }
             bucket.sessions.add(sess.date);
             if (sess.date > bucket.lastDate) bucket.lastDate = sess.date;
             const topW = numeric(ex.weight);
@@ -2538,8 +2586,8 @@
         });
         // Top 5 exercises by total volume, plus session counts.
         const topExercises = Object.entries(perExercise)
-          .map(([name, b]) => ({
-            name,
+          .map(([, b]) => ({
+            name: b.displayName,
             volume: Math.round(b.volume),
             sessions: b.sessions.size,
             maxWeight: b.maxWeight,
@@ -2610,6 +2658,7 @@
         filter: yearFilter,
         availableYears,
         availableTypes,
+        distanceCaption,   // v33.2 Bug #7: user-facing "runs + walks + rides…" caption
         all: allData,
         run: runData,
         walk: walkData,
@@ -3211,17 +3260,32 @@
 
       // PREFERRED: derive blocks from the active program in the new Programs
       // tab. This is the path going forward (v14+); the rest are legacy.
+      // v33.2 fix (Bug #2): distinguish "DB says no active program" from
+      // "DB unreachable / errored". When the query succeeds and returns
+      // null, the user has intentionally no active program — do NOT fall
+      // through to the stale localStorage cache. Also nuke the cache so
+      // it can't come back on the next open.
+      let queryOk = false;
       try {
         const ap = await sbActiveProgram();
+        queryOk = true;
         if (ap && ap.structure && Array.isArray(ap.structure.weeks)) {
           const cfg = deriveBlocksFromProgram_(ap);
           programCache = { ...cfg, fetchedAt: Date.now(), source: 'programs' };
           localStorage.setItem(PROG_KEY, JSON.stringify(programCache));
           return programCache;
         }
-      } catch (e) { /* fall through */ }
+      } catch (e) { /* fall through — but only if the query itself failed */ }
 
-      // Then localStorage cache (last good config)
+      // If Supabase told us "no active program" (queryOk with no ap),
+      // trust that answer. Clear stale local cache and return null so the
+      // caller shows a clean "no active program" state.
+      if (queryOk) {
+        try { localStorage.removeItem(PROG_KEY); } catch (e) {}
+        return null;
+      }
+
+      // Query failed (offline / network). Fall back to localStorage cache.
       try {
         const stored = JSON.parse(localStorage.getItem(PROG_KEY) || 'null');
         if (stored && stored.blocks && stored.fetchedAt && (Date.now() - stored.fetchedAt < 86400000)) {
@@ -3347,8 +3411,40 @@
       return { source, exercises };
     }
 
+    // v33.2 fix (Bug #3): smarter exercise-name normalization so entries
+    // that differ only by punctuation, abbreviation, or superset suffixes
+    // dedupe correctly in Top Exercises and history matches.
+    //   "DB Bench Press"          → "dumbbell bench press"
+    //   "Dumbbell Bench Press"    → "dumbbell bench press"
+    //   "Dips — bodyweight (SS-B)"→ "dips bodyweight"
+    //   "Pull-Ups (Reverse Grip)" → "pull ups reverse grip"
+    // Also used by sbExerciseHistory so the progression page pulls in
+    // sessions logged under any spelling of the same exercise.
     function normalizeExName_(s) {
-      return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      let x = String(s || '');
+      // 1) Superset markers only — safe to drop.
+      x = x.replace(/\((?:ss|superset)[\s\-–—:]*[a-z0-9]+\)/gi, ' ');
+      // 2) Uniform punctuation → space.
+      x = x.replace(/[—–\-_/,.:;()]/g, ' ');
+      // 3) Whitespace + case.
+      x = x.replace(/\s+/g, ' ').trim().toLowerCase();
+      // 4) Expand common abbreviations. Word-boundaries only so "sumo db"
+      //    doesn't become "sumo dumbbelldeadlift".
+      const abbrev = [
+        [/\bdb\b/g,   'dumbbell'],
+        [/\bbb\b/g,   'barbell'],
+        [/\bkb\b/g,   'kettlebell'],
+        [/\boh\b/g,   'overhead'],
+        [/\bohp\b/g,  'overhead press'],
+        [/\brdl\b/g,  'romanian deadlift'],
+        [/\bsldl\b/g, 'stiff leg deadlift'],
+        [/\bbw\b/g,   'bodyweight'],
+        [/\bsq\b/g,   'squat'],
+      ];
+      abbrev.forEach(([re, expand]) => { x = x.replace(re, expand); });
+      // 5) Collapse whitespace again after expansion.
+      x = x.replace(/\s+/g, ' ').trim();
+      return x;
     }
 
     // Look at the most recent lift session and return the NEXT day-letter
@@ -4226,6 +4322,11 @@
     // the training plan auto-route and uses the program's lift logger
     // instead. Cleared after one use.
     let _bypassPlanAutoRouteForLift = false;
+    // v33.2 (Bug #4): analog for Run — set by callers who explicitly want
+    // to bypass the "already logged today?" auto-route (e.g. Home's "Log
+    // another run today" affordance if we add one later). Consumed once
+    // then reset.
+    let _bypassRunAutoRouteForRun = false;
     // v32.4.4: remembers where the user came from BEFORE renderLift
     // auto-routed to plan-log-lift, so plan-log-lift's back button can
     // return there instead of routing back to renderLift and looping.
@@ -4581,6 +4682,28 @@
     }
 
     async function renderRun(app) {
+      // v33.2 fix (Bug #4): mirror the Lift "already logged today?" auto-
+      // route. If the user taps Run from Home and today already has a
+      // run logged, jump to the run-edit view (which is the closest
+      // thing to a run session detail) instead of showing a blank
+      // Log Run form. Preserves the caller so Cancel/Back returns
+      // sensibly. Guarded by _bypassRunAutoRouteForRun in case we
+      // ever add a "log another run today" button.
+      const preRunView = _previousView;
+      if (!_planRunPrefill && !_bypassRunAutoRouteForRun) {
+        try {
+          const today = todayISO();
+          const { data: existingRuns } = await _sb.from('runs')
+            .select('id').eq('user_id', currentUser.id).eq('date', today)
+            .order('id', { ascending: false }).limit(1);
+          if (existingRuns && existingRuns.length) {
+            _runEditRef = { id: existingRuns[0].id };
+            return render('run-edit');
+          }
+        } catch (e) { /* fall through to log form */ }
+      }
+      _bypassRunAutoRouteForRun = false;
+
       // Pull off any pre-fill from a training plan tap (target miles + notes).
       const prefill = _planRunPrefill;
       _planRunPrefill = null;
@@ -5104,7 +5227,7 @@
         el('div', { class: 'card' }, [
           el('h2', {}, 'Total miles'),
           el('div', { class: 'big' }, String(s.totalMiles)),
-          el('div', { class: 'muted', style: 'margin-top: 4px;' }, 'runs + walks + activities'),
+          el('div', { class: 'muted', style: 'margin-top: 4px;' }, data.distanceCaption || 'across all distance workouts'),
         ]),
       ]));
       // Sessions by modality
@@ -5310,6 +5433,7 @@
             style: 'padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer;',
             onclick: () => {
               _exerciseProgressionName = ex.name;
+              _exerciseProgressionReturnTo = 'analytics';
               render('exercise-progression');
             },
           }, [
@@ -5955,6 +6079,7 @@
           class: 'card session-ex progression-tap',
           onclick: () => {
             _exerciseProgressionName = ex.name;
+            _exerciseProgressionReturnTo = 'lift-session';
             render('exercise-progression');
           },
         }, [
@@ -5985,6 +6110,10 @@
 
     // -------- Exercise progression screen --------
     let _exerciseProgressionName = null; // set by Session Detail card tap
+    // v33.2 fix (Bug #1): capture the caller so the Back button routes
+    // there instead of always falling back to Calendar/lift-session.
+    // Set by each entry point; consumed by renderExerciseProgression.
+    let _exerciseProgressionReturnTo = null;
 
     // Fetch every lift_sessions row that contains an exercise matching this
     // name (case + whitespace-insensitive). Returns one entry per session
@@ -6029,6 +6158,14 @@
 
     async function renderExerciseProgression(app) {
       const name = _exerciseProgressionName;
+      // v33.2 fix (Bug #1): consume the caller reference set by the entry
+      // point (Analytics Top Exercises or Session Detail). Fall through to
+      // the old heuristic when unset (older entry points, e.g. dev links).
+      const returnTo = _exerciseProgressionReturnTo;
+      _exerciseProgressionReturnTo = null;
+      const backLabel = returnTo === 'analytics' ? '← Back to Analytics'
+                      : returnTo === 'lift-session' ? '← Back to session'
+                      : '← Back';
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, name || 'Exercise'),
       ]));
@@ -6036,12 +6173,11 @@
         class: 'btn-link',
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
         onclick: () => {
-          // Go back to the session detail we came from (if we still have
-          // its ref), otherwise fall back to the Calendar list view.
+          if (returnTo) return render(returnTo);
           if (_liftSessionRef) render('lift-session');
           else render('calendar');
         },
-      }, '← Back'));
+      }, backLabel));
 
       if (!name) {
         app.appendChild(el('div', { class: 'card' }, 'No exercise selected.'));
@@ -7944,8 +8080,17 @@
     async function renderLiftEdit(app) {
       const ref = _liftEditRef;
       if (!ref || !ref.sessionId) {
-        app.appendChild(el('div', { class: 'card' }, 'No session selected for editing.'));
-        return;
+        // v33.2 fix: after Save, _liftEditRef is cleared and the router
+        // navigates to Calendar. But native browser Back can pop back to
+        // this route with a null ref, which used to leave the user on an
+        // empty "No session selected" card with no nav-tab highlight.
+        // Instead, silently redirect to the sensible caller: the session
+        // detail if it's still open, otherwise the previous view, else
+        // Calendar. Skip our own view so we don't loop.
+        const fallback = (_liftSessionRef && 'lift-session')
+                      || (_previousView && !['lift-edit'].includes(_previousView) ? _previousView : null)
+                      || 'calendar';
+        return render(fallback);
       }
 
       app.appendChild(el('header', { class: 'top' }, [
@@ -8440,6 +8585,18 @@
         onclick: backHandler,
       }, '← Cancel'));
     }
+    // v33.2 fix (Bug #5): edit views used to hardcode Cancel → Calendar,
+    // but users often land here from Home > Today's Workout (or the Home
+    // History widget). Honor _previousView so Cancel returns them to the
+    // caller. Filter own edit views AND the logger views (Run/Lift auto-
+    // route through those to reach an edit view, so treating them as
+    // callers creates loops).
+    function editBackTo_() {
+      const skip = new Set(['run-edit', 'walk-edit', 'activity-edit', 'pullups-edit', 'lift-edit',
+                            'run', 'lift', 'walk', 'pullups']);
+      if (_previousView && !skip.has(_previousView) && !_previousView.startsWith('activity-')) return _previousView;
+      return 'home';
+    }
     function deleteButton_(app, onConfirm) {
       app.appendChild(el('div', { style: 'text-align: center; margin-top: 12px;' }, [
         el('button', {
@@ -8459,7 +8616,7 @@
     // ── Run edit ─────────────────────────────────────────
     async function renderRunEdit(app) {
       const ref = _runEditRef;
-      editHeader_(app, 'Edit run', () => { _runEditRef = null; render('calendar'); });
+      editHeader_(app, 'Edit run', () => { const back = editBackTo_(); _runEditRef = null; render(back); });
       if (!ref || !ref.id) {
         app.appendChild(el('div', { class: 'card' }, 'No run selected.'));
         return;
@@ -8530,7 +8687,7 @@
     // ── Walk edit ────────────────────────────────────────
     async function renderWalkEdit(app) {
       const ref = _walkEditRef;
-      editHeader_(app, 'Edit walk', () => { _walkEditRef = null; render('calendar'); });
+      editHeader_(app, 'Edit walk', () => { const back = editBackTo_(); _walkEditRef = null; render(back); });
       if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No walk selected.')); return; }
       let row;
       try { row = await sbGetRowById('walks', ref.id, 'id,date,distance,duration_secs,notes'); }
@@ -8582,7 +8739,7 @@
     // ── Activity edit ────────────────────────────────────
     async function renderActivityEdit(app) {
       const ref = _activityEditRef;
-      editHeader_(app, 'Edit activity', () => { _activityEditRef = null; render('calendar'); });
+      editHeader_(app, 'Edit activity', () => { const back = editBackTo_(); _activityEditRef = null; render(back); });
       if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No activity selected.')); return; }
       let row;
       try { row = await sbGetRowById('activities', ref.id, 'id,date,activity_type,duration_secs,distance,intensity,notes'); }
@@ -8656,7 +8813,7 @@
     // ── Pull-ups edit ────────────────────────────────────
     async function renderPullupsEdit(app) {
       const ref = _pullupsEditRef;
-      editHeader_(app, 'Edit pull-ups', () => { _pullupsEditRef = null; render('calendar'); });
+      editHeader_(app, 'Edit pull-ups', () => { const back = editBackTo_(); _pullupsEditRef = null; render(back); });
       if (!ref || !ref.id) { app.appendChild(el('div', { class: 'card' }, 'No session selected.')); return; }
       let row;
       try { row = await sbGetRowById('pullup_sessions', ref.id, 'id,date,sets,total_reps,notes'); }
@@ -9571,7 +9728,7 @@
           <div class="plan-slider-row">
             <div class="plan-slider-hdr">
               <label>Which days can you run?</label>
-              <div class="muted" style="font-size:11px">Optional — leave blank and we'll pick sensible defaults</div>
+              <div class="muted" id="pDowsNote" style="font-size:11px">Optional — leave blank and we'll assign Tue / Thu / Sat.</div>
             </div>
             <div class="plan-dow-row" id="pDows">
               ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i) => `
@@ -9617,6 +9774,38 @@
       document.getElementById('pDaysVal').innerHTML  = `${dv} <span>days</span>`;
       document.getElementById('pWeeksVal').innerHTML = `${wv} <span>wks</span>`;
 
+      // v33.2 (Q1/Q2): live day-count feedback for the DOW picker + a
+      // dynamic callout that spells out the auto-assign defaults for the
+      // current days-per-week slider position.
+      const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const dowDefaultLabels = {
+        2: 'Tue / Sat',
+        3: 'Tue / Thu / Sat',
+        4: 'Tue / Thu / Fri / Sat',
+        5: 'Mon / Wed / Thu / Fri / Sat',
+      };
+      window.updatePDowsNote = function() {
+        const note = document.getElementById('pDowsNote');
+        if (!note) return;
+        const daysEl = document.getElementById('pDays');
+        const need = Number(daysEl ? daysEl.value : 3) || 3;
+        const have = Array.isArray(window.planSelectedDows) ? window.planSelectedDows.length : 0;
+        if (have === 0) {
+          note.textContent = `Optional — leave blank and we'll assign ${dowDefaultLabels[need] || 'sensible defaults'}.`;
+          note.style.color = 'var(--muted)';
+        } else if (have === need) {
+          note.textContent = `✓ ${have} of ${need} days selected.`;
+          note.style.color = 'var(--success, #8CC63F)';
+        } else {
+          note.textContent = `${have} of ${need} days selected. Pick ${need - have > 0 ? (need-have)+' more' : Math.abs(need-have)+' fewer'} — or leave blank for auto-assign.`;
+          note.style.color = 'var(--danger, #D93A2B)';
+        }
+      };
+      // Hook the days slider so the note updates as the user drags.
+      const pDaysEl = document.getElementById('pDays');
+      if (pDaysEl) pDaysEl.addEventListener('input', () => window.updatePDowsNote());
+      window.updatePDowsNote();
+
       // Restore race dist if saved
       if (savedState.raceDist) {
         const s = document.getElementById('pRaceDist');
@@ -9660,6 +9849,8 @@
       else arr.push(i);
       const btn = document.querySelector(`.plan-dow-btn[data-dow="${i}"]`);
       if (btn) btn.classList.toggle('sel');
+      // v33.2 (Q1): refresh the live day-count feedback.
+      if (typeof window.updatePDowsNote === 'function') window.updatePDowsNote();
     }
 
     function planGenerate() {
@@ -9671,6 +9862,14 @@
       if (isNaN(miles)||miles<0) { errEl.textContent='Please enter your current weekly mileage.'; errEl.classList.add('vis'); return; }
       const days  = parseInt(document.getElementById('pDays').value);
       const weeks = parseInt(document.getElementById('pWeeks').value);
+      // v33.2 (Q1): hard block on day-count mismatch. Empty = auto-assign,
+      // exact match = OK, anything else was silently truncating before.
+      const chosenDows = Array.isArray(window.planSelectedDows) ? window.planSelectedDows : [];
+      if (chosenDows.length > 0 && chosenDows.length !== days) {
+        errEl.textContent = `You picked ${chosenDows.length} training day${chosenDows.length===1?'':'s'} but selected ${days} days per week. Adjust one to match, or clear your day picks to auto-assign.`;
+        errEl.classList.add('vis');
+        return;
+      }
       const raceDist = document.getElementById('pRaceDist').value;
       const raceTime = document.getElementById('pRaceTime').value.trim();
       const paces = pPaces(planLevelSel, raceDist, raceTime);
@@ -10405,10 +10604,27 @@
       form.appendChild(tmplCard);
 
       // Days of week
+      // v33.2 (Q1): live day-count feedback so users see when their picks
+      // don't match the template's daysPerWeek. Empty = auto-spread (OK),
+      // exact match = OK, anything else = block on Generate with a hint.
       const dowCard = el('div', { class: 'card' });
       dowCard.appendChild(el('h2', {}, 'WHICH DAYS?'));
-      dowCard.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -8px; margin-bottom: 10px;' },
-        'Optional — pick your training days. Skip and we\'ll spread them evenly.'));
+      const dowNoteEl = el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -8px; margin-bottom: 10px;' });
+      dowCard.appendChild(dowNoteEl);
+      const updateDowNote = () => {
+        const need = LIFT_TEMPLATES.find(t => t.id === state.templateId)?.daysPerWeek || state.days;
+        const have = state.dows.length;
+        if (have === 0) {
+          dowNoteEl.textContent = `Optional — leave blank and we'll spread ${need} sessions evenly across the week.`;
+          dowNoteEl.style.color = 'var(--muted)';
+        } else if (have === need) {
+          dowNoteEl.textContent = `✓ ${have} of ${need} days selected. Ready to generate.`;
+          dowNoteEl.style.color = 'var(--success, #8CC63F)';
+        } else {
+          dowNoteEl.textContent = `${have} of ${need} days selected. Pick ${need - have > 0 ? 'more' : 'fewer'} to match this template (or leave blank for auto-spread).`;
+          dowNoteEl.style.color = 'var(--danger, #D93A2B)';
+        }
+      };
       const dowRow = el('div', { class: 'plan-dow-row' });
       ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
         const on = state.dows.includes(i);
@@ -10420,12 +10636,20 @@
             if (idx > -1) state.dows.splice(idx, 1);
             else state.dows.push(i);
             b.classList.toggle('sel');
+            updateDowNote();
           },
         }, d);
         dowRow.appendChild(b);
       });
       dowCard.appendChild(dowRow);
       form.appendChild(dowCard);
+      // Update note when template changes (via the template picker above).
+      // Piggyback on the existing tap handlers by re-computing after each
+      // paint tick — cheap and reliable.
+      tmplRows.forEach(({ row }) => {
+        row.addEventListener('click', () => setTimeout(updateDowNote, 0));
+      });
+      updateDowNote();
 
       // Equipment checklist
       const eqCard = el('div', { class: 'card' });
@@ -10479,6 +10703,15 @@
       const genBtn = el('button', {
         style: 'margin-top: 8px; width: 100%;',
         onclick: () => {
+          // v33.2 (Q1): hard block on day-count mismatch. Empty dows
+          // means "auto-spread" (still allowed). Any non-zero count that
+          // doesn't match the template's daysPerWeek is a mistake — we
+          // used to silently truncate/pad, but users expected the count
+          // they picked to be respected.
+          const need = LIFT_TEMPLATES.find(t => t.id === state.templateId)?.daysPerWeek || state.days;
+          if (state.dows.length > 0 && state.dows.length !== need) {
+            return toast(`This template needs ${need} training days per week. You picked ${state.dows.length}. Adjust your selection or leave it blank to auto-spread.`, true);
+          }
           const cleanState = {
             templateId: state.templateId,
             days:       state.days,
