@@ -1589,6 +1589,18 @@
       return v;
     }
 
+    // v32.5: update the user's modalities list. Used by the Modalities
+    // & Weekly Goals editor. Preserves other user_profiles fields.
+    async function sbUpdateModalities(modalityIds) {
+      const clean = Array.isArray(modalityIds) ? [...new Set(modalityIds)] : [];
+      const { error } = await _sb.from('user_profiles').upsert({
+        id: currentUser.id,
+        modalities: clean,
+      }, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+      _userProfileCache = null;
+    }
+
     async function sbShoes() {
       const { data, error } = await _sb.from('shoe_mileage').select('*').eq('user_id', currentUser.id);
       if (error) throw new Error(error.message);
@@ -1803,7 +1815,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.6';
+    const APP_VERSION = 'v32.5';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2776,6 +2788,130 @@
       }, 'Reset to defaults'));
     }
 
+    // -------- v32.5: Modalities & Weekly Goals editor --------
+    // A unified card in Profile for adding/removing modalities and setting
+    // their weekly session goals. Fills the gap of "onboarding picks are
+    // permanent" — users can toggle Cycling on later without re-signing up.
+    async function renderModalities(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Modalities & Goals')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('profile'),
+      }, '← Back to Profile'));
+
+      const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
+      app.appendChild(skel);
+
+      let profile;
+      try { profile = await sbLoadUserProfile(); }
+      catch (e) {
+        skel.remove();
+        app.appendChild(el('div', { class: 'card' }, 'Could not load your profile: ' + e.message));
+        return;
+      }
+      skel.remove();
+
+      const currentMods = new Set(userModalities_(profile));
+      const currentGoals = (profile && profile.weekly_goals && typeof profile.weekly_goals === 'object')
+        ? { ...profile.weekly_goals }
+        : {};
+
+      app.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
+          "Toggle a modality to add or remove its Home tile. Set a weekly session target — 0 means no target, just log freely. Changes save when you tap the button at the bottom."),
+      ]));
+
+      // Per-modality row: checkbox + label + goal input
+      const wrap = el('div', { class: 'card' });
+      const rowRefs = []; // { id, checkbox, goalInput }
+
+      MODALITIES.forEach((m, idx) => {
+        const isOn = currentMods.has(m.id);
+        const currentGoal = currentGoals[m.id] || 0;
+
+        const checkbox = el('input', {
+          type: 'checkbox',
+          id: `mod-${m.id}`,
+          ...(isOn ? { checked: 'checked' } : {}),
+        });
+        const goalInput = el('input', {
+          type: 'number',
+          inputmode: 'numeric',
+          min: '0',
+          max: '99',
+          value: String(currentGoal),
+          style: 'width: 56px; text-align: center; padding: 6px 8px; margin: 0;',
+        });
+        rowRefs.push({ id: m.id, checkbox, goalInput });
+
+        // Whole-row click toggles checkbox (unless clicking the input).
+        const row = el('label', {
+          for: `mod-${m.id}`,
+          style: 'display: flex; align-items: center; gap: 12px; padding: 12px 0;'
+               + (idx < MODALITIES.length - 1 ? ' border-bottom: 1px solid var(--border);' : ''),
+        }, [
+          checkbox,
+          el('span', { style: 'font-size: 20px; flex-shrink: 0;' }, m.icon),
+          el('div', { style: 'flex: 1;' }, [
+            el('div', { style: 'font-weight: 600; font-size: 14px;' }, m.label),
+            el('div', { class: 'muted', style: 'font-size: 12px; line-height: 1.3; margin-top: 2px;' }, m.desc),
+          ]),
+          el('div', { style: 'display: flex; flex-direction: column; align-items: center; gap: 4px;' }, [
+            el('span', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase;' }, '/ week'),
+            goalInput,
+          ]),
+        ]);
+        // Prevent the label's for=id from double-toggling when clicking the input.
+        goalInput.addEventListener('click', (e) => e.preventDefault());
+        goalInput.addEventListener('input', (e) => e.stopPropagation());
+        wrap.appendChild(row);
+      });
+      app.appendChild(wrap);
+
+      // Save button
+      const saveBtn = el('button', {
+        style: 'margin-top: 16px; width: 100%;',
+        onclick: async () => {
+          const picked = rowRefs.filter(r => r.checkbox.checked).map(r => r.id);
+          if (picked.length === 0) {
+            toast('Pick at least one modality', true);
+            return;
+          }
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving…';
+          try {
+            // Save modalities list
+            await sbUpdateModalities(picked);
+            // Save goals — one call per modality with a non-zero value or a change.
+            // sbUpdateGoal handles the delete case (value 0 removes the key).
+            for (const r of rowRefs) {
+              const val = Math.max(0, Math.min(99, Math.round(Number(r.goalInput.value) || 0)));
+              // Only send updates for modalities the user picked (goals for
+              // hidden modalities aren't useful) OR for currently-set goals
+              // being cleared.
+              if (picked.includes(r.id) || currentGoals[r.id]) {
+                await sbUpdateGoal(r.id, val);
+              }
+            }
+            toast('Modalities & goals updated');
+            setTimeout(() => render('home'), 600);
+          } catch (e) {
+            toast('Could not save: ' + (e.message || e), true);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save changes';
+          }
+        },
+      }, 'Save changes');
+      app.appendChild(saveBtn);
+
+      // Reset link
+      app.appendChild(el('div', { style: 'text-align: center; margin-top: 12px;' }, [
+        el('div', { class: 'muted', style: 'font-size: 11px; line-height: 1.5;' },
+          "Tip: to just tweak a weekly goal number without opening this screen, tap the number directly on Home."),
+      ]));
+    }
+
     // -------- DOM helpers --------
     function $(sel, root = document) { return root.querySelector(sel); }
     function el(tag, attrs = {}, children = []) {
@@ -3359,6 +3495,7 @@
       else if (view === 'pullups-edit') await renderPullupsEdit(app);
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'dot-colors') await renderDotColors(app);
+      else if (view === 'modalities') await renderModalities(app);
       else if (view === 'plan') renderPlan(app);
     }
 
@@ -9062,7 +9199,21 @@
         }, 'Send feedback'),
       ]));
 
-      // Preferences
+      // Preferences — Modalities & Goals (v32.5)
+      app.appendChild(el('div', {
+        class: 'card',
+        style: 'cursor: pointer; margin-top: 4px;',
+        onclick: () => render('modalities'),
+      }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('h2', { style: 'margin: 0;' }, 'Modalities & Goals'),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; line-height: 1.4;' },
+          'Add or remove modalities (Home tiles) and set weekly session targets.'),
+      ]));
+
+      // Preferences — Calendar colors
       app.appendChild(el('div', {
         class: 'card',
         style: 'cursor: pointer; margin-top: 4px;',
