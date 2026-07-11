@@ -1840,7 +1840,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.0.2';
+    const APP_VERSION = 'v33.0.3';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2929,7 +2929,11 @@
               }
             }
             toast('Modalities & goals updated');
-            setTimeout(() => render('home'), 600);
+            // v33.0.3: stay on this screen after saving (matches settings-
+            // screen conventions). Users who want to see the effect on
+            // Home navigate there manually.
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save changes';
           } catch (e) {
             toast('Could not save: ' + (e.message || e), true);
             saveBtn.disabled = false;
