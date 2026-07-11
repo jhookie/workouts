@@ -1840,7 +1840,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.0.1';
+    const APP_VERSION = 'v33.0.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2838,9 +2838,18 @@
       skel.remove();
 
       const currentMods = new Set(userModalities_(profile));
+      // v33.0.2: read weekly_goals JSONB, then fall back to legacy
+      // columns so pre-JSONB-migration users still see their existing
+      // running/strength goals (mirrors sbHomeStats behavior).
       const currentGoals = (profile && profile.weekly_goals && typeof profile.weekly_goals === 'object')
         ? { ...profile.weekly_goals }
         : {};
+      if (currentGoals.running == null && profile && profile.weekly_run_count_goal) {
+        currentGoals.running = profile.weekly_run_count_goal;
+      }
+      if (currentGoals.strength == null && profile && profile.weekly_lift_count_goal) {
+        currentGoals.strength = profile.weekly_lift_count_goal;
+      }
 
       app.appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'muted', style: 'font-size: 13px; line-height: 1.5;' },
@@ -6766,8 +6775,11 @@
 
     async function sbLoadUserProfile(force = false) {
       if (!force && _userProfileCache) return _userProfileCache;
+      // v33.0.2: include weekly_goals JSONB in the SELECT — was missing,
+      // which made Profile → Modalities & Goals show 0 for every goal
+      // even when Home had them set (Home uses its own query).
       const { data, error } = await _sb.from('user_profiles')
-        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,modalities,dashboard_widgets,onboarded_at')
+        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at')
         .eq('id', currentUser.id).maybeSingle();
       if (error) { _userProfileCache = null; return null; }
       _userProfileCache = data;
