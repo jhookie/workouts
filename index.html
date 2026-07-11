@@ -1815,7 +1815,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.5';
+    const APP_VERSION = 'v33';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3457,7 +3457,7 @@
       // 'plan' (Run Planner) is now a sub-view of Programs; 'training-plan'
       // (imported plan viewer) is reachable from multiple places but
       // conceptually belongs to Programs too.
-      const programsSubviews = new Set(['plan', 'training-plan', 'training-plan-detail']);
+      const programsSubviews = new Set(['plan', 'training-plan', 'training-plan-detail', 'lift-planner']);
       const navView = isLoggerView ? 'home'
                     : programsSubviews.has(view) ? 'programs'
                     : view;
@@ -3496,6 +3496,7 @@
       else if (view === 'profile') await renderProfile(app);
       else if (view === 'dot-colors') await renderDotColors(app);
       else if (view === 'modalities') await renderModalities(app);
+      else if (view === 'lift-planner') renderLiftPlanner(app);
       else if (view === 'plan') renderPlan(app);
     }
 
@@ -6292,6 +6293,19 @@
         ]),
         el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
           'Generate a personalized running plan from 1 mile to Half Marathon. Pick a distance, fitness level, and days per week — get a full week-by-week schedule.'),
+      ]));
+      // v33: Lifting Plan Generator
+      builderWrap.appendChild(el('div', {
+        class: 'card',
+        style: 'cursor: pointer;',
+        onclick: () => render('lift-planner'),
+      }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, 'Lifting Plan Generator'),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
+          'Full Body, Push/Pull/Legs, Upper/Lower — pick a template, tell us your equipment and training days, get a weekly plan with linear progression built in.'),
       ]));
       app.appendChild(builderWrap);
 
@@ -9762,6 +9776,594 @@
         toast('Could not save: ' + (e.message || e), true);
       }
     }
+
+    // ========================================================
+    // v33 Lifting Plan Generator
+    // ------------------------------------------------------------
+    // Wizard-based generator that outputs a date-anchored lift plan.
+    // Templates + exercises are hand-authored below. Users pick goal +
+    // days/week + days-of-week + equipment + priority; the generator
+    // picks a template that fits their constraints and substitutes
+    // exercises based on equipment. Linear progression built in.
+    // ========================================================
+
+    // -------- Exercise database --------
+    // Muscle groups: chest, back, shoulders, biceps, triceps, quads,
+    // hamstrings, glutes, calves, core, full-body. Equipment tags let
+    // the generator swap when the user lacks the primary equipment.
+    const LIFT_EXERCISES = [
+      // Compounds — barbell
+      { id: 'bb_bench',      name: 'Barbell Bench Press',  muscle: 'Chest',      equipment: ['barbell', 'bench'],       compound: true },
+      { id: 'bb_ohp',        name: 'Barbell Overhead Press', muscle: 'Shoulders', equipment: ['barbell'],                compound: true },
+      { id: 'bb_row',        name: 'Barbell Row',          muscle: 'Back',       equipment: ['barbell'],                compound: true },
+      { id: 'bb_squat',      name: 'Barbell Back Squat',   muscle: 'Legs',       equipment: ['barbell', 'rack'],        compound: true },
+      { id: 'bb_deadlift',   name: 'Barbell Deadlift',     muscle: 'Back',       equipment: ['barbell'],                compound: true },
+      { id: 'bb_rdl',        name: 'Barbell Romanian Deadlift', muscle: 'Hamstrings', equipment: ['barbell'],           compound: true },
+      { id: 'bb_incline',    name: 'Barbell Incline Bench Press', muscle: 'Chest', equipment: ['barbell', 'bench-adj'], compound: true },
+      { id: 'bb_front_sq',   name: 'Barbell Front Squat',  muscle: 'Legs',       equipment: ['barbell', 'rack'],        compound: true },
+      // Compounds — dumbbell
+      { id: 'db_bench',      name: 'DB Bench Press',       muscle: 'Chest',      equipment: ['dumbbells', 'bench'],     compound: true },
+      { id: 'db_incline',    name: 'DB Incline Bench Press', muscle: 'Chest',    equipment: ['dumbbells', 'bench-adj'], compound: true },
+      { id: 'db_ohp',        name: 'DB Overhead Press',    muscle: 'Shoulders',  equipment: ['dumbbells'],              compound: true },
+      { id: 'db_row',        name: 'DB Row (single arm)',  muscle: 'Back',       equipment: ['dumbbells', 'bench'],     compound: true },
+      { id: 'db_rdl',        name: 'DB Romanian Deadlift', muscle: 'Hamstrings', equipment: ['dumbbells'],              compound: true },
+      { id: 'db_lunge',      name: 'DB Walking Lunge',     muscle: 'Legs',       equipment: ['dumbbells'],              compound: true },
+      { id: 'db_goblet_sq',  name: 'Goblet Squat',         muscle: 'Legs',       equipment: ['dumbbells'],              compound: true },
+      // Bodyweight staples
+      { id: 'bw_pullup',     name: 'Pull-Ups',             muscle: 'Back',       equipment: ['pullup-bar'],             compound: true },
+      { id: 'bw_chinup',     name: 'Chin-Ups',             muscle: 'Back',       equipment: ['pullup-bar'],             compound: true },
+      { id: 'bw_dip',        name: 'Dips',                 muscle: 'Chest',      equipment: ['dip-bar'],                compound: true },
+      { id: 'bw_pushup',     name: 'Push-Ups',             muscle: 'Chest',      equipment: ['bodyweight'],             compound: true },
+      { id: 'bw_squat',      name: 'Bodyweight Squat',     muscle: 'Legs',       equipment: ['bodyweight'],             compound: true },
+      // Machines
+      { id: 'm_leg_press',   name: 'Leg Press',            muscle: 'Legs',       equipment: ['machines'],               compound: true },
+      { id: 'm_lat_pulldown',name: 'Lat Pulldown',         muscle: 'Back',       equipment: ['machines'],               compound: false },
+      { id: 'm_leg_curl',    name: 'Leg Curl',             muscle: 'Hamstrings', equipment: ['machines'],               compound: false },
+      { id: 'm_leg_ext',     name: 'Leg Extension',        muscle: 'Quads',      equipment: ['machines'],               compound: false },
+      // Isolation — dumbbells
+      { id: 'db_lat_raise',  name: 'DB Lateral Raise',     muscle: 'Shoulders',  equipment: ['dumbbells'],              compound: false },
+      { id: 'db_curl',       name: 'DB Biceps Curl',       muscle: 'Biceps',     equipment: ['dumbbells'],              compound: false },
+      { id: 'db_hammer',     name: 'DB Hammer Curl',       muscle: 'Biceps',     equipment: ['dumbbells'],              compound: false },
+      { id: 'db_tri_ext',    name: 'DB Triceps Extension', muscle: 'Triceps',    equipment: ['dumbbells'],              compound: false },
+      { id: 'db_rear_delt',  name: 'DB Rear Delt Fly',     muscle: 'Shoulders',  equipment: ['dumbbells', 'bench'],     compound: false },
+      // Cables / bands
+      { id: 'c_cable_row',   name: 'Cable Row',            muscle: 'Back',       equipment: ['cables'],                 compound: true },
+      { id: 'c_facepull',    name: 'Face Pull',            muscle: 'Shoulders',  equipment: ['cables'],                 compound: false },
+      { id: 'c_tricep_pd',   name: 'Triceps Pushdown',     muscle: 'Triceps',    equipment: ['cables'],                 compound: false },
+      { id: 'c_curl',        name: 'Cable Curl',           muscle: 'Biceps',     equipment: ['cables'],                 compound: false },
+      // Core
+      { id: 'core_plank',    name: 'Plank',                muscle: 'Core',       equipment: ['bodyweight'],             compound: false },
+      { id: 'core_deadbug',  name: 'Dead Bug',             muscle: 'Core',       equipment: ['bodyweight'],             compound: false },
+      { id: 'core_hlr',      name: 'Hanging Leg Raise',    muscle: 'Core',       equipment: ['pullup-bar'],             compound: false },
+    ];
+
+    // -------- Equipment options (checklist) --------
+    const LIFT_EQUIPMENT = [
+      { id: 'barbell',     label: 'Barbell + plates' },
+      { id: 'rack',        label: 'Squat rack' },
+      { id: 'bench',       label: 'Flat bench' },
+      { id: 'bench-adj',   label: 'Adjustable / incline bench' },
+      { id: 'dumbbells',   label: 'Dumbbells (range)' },
+      { id: 'pullup-bar',  label: 'Pull-up bar' },
+      { id: 'dip-bar',     label: 'Dip bar' },
+      { id: 'cables',      label: 'Cable machine' },
+      { id: 'machines',    label: 'Selectorized machines' },
+      { id: 'bodyweight',  label: 'Bodyweight only', alwaysOn: true },
+    ];
+
+    // -------- Templates --------
+    // Each template defines its target days/week and a set of session
+    // templates. A session template has "slots" that get filled with
+    // exercises from LIFT_EXERCISES based on user's equipment + priority.
+    // Slots are labeled by muscle emphasis so substitution stays coherent.
+    //
+    // Rep schemes progress linearly: week 1 baseline, week 2-3 add 5lb or
+    // +1 rep, week 4 deload (drop weight ~15%), then repeat with heavier
+    // starting weight.
+    const LIFT_TEMPLATES = [
+      {
+        id: 'full-body-3',
+        name: 'Full Body — 3 Day',
+        daysPerWeek: 3,
+        experience: 'novice',
+        description: 'Squat, bench, deadlift-style linear progression. Three full-body sessions per week. Classic beginner shape.',
+        sessions: [
+          {
+            name: 'Full Body A',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+          {
+            name: 'Full Body B',
+            slots: [
+              { emphasis: 'hinge-compound',   preferMuscle: 'Back',       sets: 1, reps: '5', requireCompound: true },
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 3, reps: '8-10' },
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 3, reps: '5', requireCompound: true },
+            ],
+          },
+          {
+            name: 'Full Body C',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 3, reps: '5', requireCompound: true },
+              { emphasis: 'accessory-arm',    preferMuscle: 'Biceps',     sets: 3, reps: '10-12' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'ppl-3',
+        name: 'Push / Pull / Legs — 3 Day',
+        daysPerWeek: 3,
+        experience: 'intermediate',
+        description: 'One dedicated day per movement pattern. Great for intermediates who want more muscle-group focus per session.',
+        sessions: [
+          {
+            name: 'Push Day',
+            slots: [
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 4, reps: '6-8', requireCompound: true },
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 3, reps: '8-10', requireCompound: true },
+              { emphasis: 'push-accessory',   preferMuscle: 'Chest',      sets: 3, reps: '10-12' },
+              { emphasis: 'shoulder-iso',     preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '10-12' },
+            ],
+          },
+          {
+            name: 'Pull Day',
+            slots: [
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 4, reps: '6-8', requireCompound: true },
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 3, reps: '8-10', requireCompound: true },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 3, reps: '10-12' },
+              { emphasis: 'rear-delt',        preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '10-12' },
+            ],
+          },
+          {
+            name: 'Legs Day',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '6-8', requireCompound: true },
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 3, reps: '8-10', requireCompound: true },
+              { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 3, reps: '10-12' },
+              { emphasis: 'ham-iso',          preferMuscle: 'Hamstrings', sets: 3, reps: '10-12' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'upper-lower-4',
+        name: 'Upper / Lower — 4 Day',
+        daysPerWeek: 4,
+        experience: 'intermediate',
+        description: 'Two upper + two lower days. Balanced volume, popular intermediate split.',
+        sessions: [
+          {
+            name: 'Upper A',
+            slots: [
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 4, reps: '5-8', requireCompound: true },
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 4, reps: '5-8', requireCompound: true },
+              { emphasis: 'push-accessory',   preferMuscle: 'Chest',      sets: 3, reps: '8-10' },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 3, reps: '8-10' },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '10-12' },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '10-12' },
+            ],
+          },
+          {
+            name: 'Lower A',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '5-8', requireCompound: true },
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 4, reps: '6-8', requireCompound: true },
+              { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 3, reps: '10-12' },
+              { emphasis: 'ham-iso',          preferMuscle: 'Hamstrings', sets: 3, reps: '10-12' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+          {
+            name: 'Upper B',
+            slots: [
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 4, reps: '5-8', requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 4, reps: '5-8', requireCompound: true },
+              { emphasis: 'push-accessory',   preferMuscle: 'Chest',      sets: 3, reps: '10-12' },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 3, reps: '10-12' },
+              { emphasis: 'shoulder-iso',     preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'rear-delt',        preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+            ],
+          },
+          {
+            name: 'Lower B',
+            slots: [
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 4, reps: '5-6', requireCompound: true },
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '6-8', requireCompound: true },
+              { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 3, reps: '10-12' },
+              { emphasis: 'lunge-accessory',  preferMuscle: 'Legs',       sets: 3, reps: '10 each' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    // Given a slot definition + the user's equipment set + a set of already-
+    // used exercise ids in this session, pick the best matching exercise.
+    function pickExerciseForSlot_(slot, availableEquip, usedIds) {
+      const emphasisMap = {
+        'squat-compound':   ex => ex.compound && ex.muscle === 'Legs' && /squat|leg press/i.test(ex.name),
+        'push-compound':    ex => ex.compound && ex.muscle === 'Chest',
+        'pull-compound':    ex => ex.compound && ex.muscle === 'Back' && !/row/i.test(ex.name),
+        'row-compound':     ex => ex.compound && ex.muscle === 'Back' && /row/i.test(ex.name),
+        'press-compound':   ex => ex.compound && ex.muscle === 'Shoulders',
+        'hinge-compound':   ex => ex.compound && (ex.muscle === 'Hamstrings' || /deadlift/i.test(ex.name)),
+        'push-accessory':   ex => ex.muscle === 'Chest',
+        'pull-accessory':   ex => ex.muscle === 'Back',
+        'leg-accessory':    ex => ex.muscle === 'Legs' || ex.muscle === 'Quads',
+        'ham-iso':          ex => ex.muscle === 'Hamstrings',
+        'lunge-accessory':  ex => /lunge/i.test(ex.name) && ex.muscle === 'Legs',
+        'triceps-iso':      ex => ex.muscle === 'Triceps',
+        'biceps-iso':       ex => ex.muscle === 'Biceps',
+        'shoulder-iso':     ex => ex.muscle === 'Shoulders' && /lateral|raise/i.test(ex.name),
+        'rear-delt':        ex => ex.muscle === 'Shoulders' && /rear delt|face pull/i.test(ex.name),
+        'accessory-arm':    ex => (ex.muscle === 'Biceps' || ex.muscle === 'Triceps'),
+        'core':             ex => ex.muscle === 'Core',
+      };
+      const matcher = emphasisMap[slot.emphasis] || (() => true);
+      const eqSet = new Set(availableEquip);
+      eqSet.add('bodyweight'); // always available
+
+      const candidates = LIFT_EXERCISES
+        .filter(matcher)
+        .filter(ex => ex.equipment.every(e => eqSet.has(e)))
+        .filter(ex => !usedIds.has(ex.id))
+        .filter(ex => !slot.requireCompound || ex.compound);
+
+      if (!candidates.length) {
+        // Relax the "already-used" constraint before giving up.
+        const relaxed = LIFT_EXERCISES
+          .filter(matcher)
+          .filter(ex => ex.equipment.every(e => eqSet.has(e)))
+          .filter(ex => !slot.requireCompound || ex.compound);
+        return relaxed[0] || null;
+      }
+
+      // Prefer barbell compounds when squat/deadlift/bench are requested,
+      // fall back to dumbbell/machine variants when barbell isn't picked.
+      const barbell = candidates.find(ex => ex.equipment.includes('barbell'));
+      return barbell || candidates[0];
+    }
+
+    // Given wizard state, produce a weeks_data-style array (matches the
+    // shape convertRunPlanToTrainingPlan_ expects when we save).
+    function generateLiftPlan_(state) {
+      const template = LIFT_TEMPLATES.find(t => t.id === state.templateId) || LIFT_TEMPLATES[0];
+      const equipment = state.equipment || [];
+      const weeks = state.weeks || 8;
+
+      const sessionsBuilt = template.sessions.map(sess => {
+        const usedIds = new Set();
+        const exercises = sess.slots.map(slot => {
+          const ex = pickExerciseForSlot_(slot, equipment, usedIds);
+          if (ex) usedIds.add(ex.id);
+          return {
+            name: ex ? ex.name : `[${slot.emphasis} — no match]`,
+            muscle: ex ? ex.muscle : '',
+            sets: slot.sets,
+            reps: slot.reps,
+          };
+        }).filter(x => !x.name.startsWith('['));
+        return { name: sess.name, exercises };
+      });
+
+      const weeksData = [];
+      for (let wi = 0; wi < weeks; wi++) {
+        const isDeload = (wi + 1) % 4 === 0; // every 4th week
+        const weekLabel = isDeload ? `Week ${wi + 1} — Recovery` : `Week ${wi + 1}`;
+        weeksData.push({
+          weekIndex: wi,
+          label: weekLabel,
+          isDeload,
+          sessions: sessionsBuilt,
+        });
+      }
+      return { template, weeksData, weeks, sessionsBuilt };
+    }
+
+    // Convert a generated lift plan into a training_plans.structure JSONB.
+    function convertLiftPlanToTrainingPlan_(state, planName, startDateISO) {
+      const gen = generateLiftPlan_(state);
+      const raw = new Date(startDateISO + 'T12:00:00');
+      const jsDow = raw.getDay();
+      const monOffset = (jsDow + 6) % 7;
+      const anchor = new Date(raw);
+      anchor.setDate(raw.getDate() - monOffset);
+
+      const dows = (Array.isArray(state.dows) && state.dows.length)
+        ? [...state.dows].sort((a,b) => a - b)
+        : (state.days === 3 ? [1, 3, 5] : state.days === 4 ? [0, 1, 3, 4] : [0, 2, 4, 5]);
+
+      const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const days = [];
+
+      gen.weeksData.forEach((wk, wi) => {
+        const sessionsThisWeek = wk.sessions;
+        const slotCount = Math.min(sessionsThisWeek.length, dows.length);
+        for (let i = 0; i < slotCount; i++) {
+          const sess = sessionsThisWeek[i];
+          const dowIdx = dows[i];
+          const d = new Date(anchor);
+          d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
+          days.push({
+            date: d.toISOString().slice(0, 10),
+            week: wi + 1,
+            dow: dowNames[dowIdx],
+            sessions: [{
+              type: 'lift',
+              name: sess.name,
+              workout_kind: gen.template.name,
+              exercises: sess.exercises,
+              deload: wk.isDeload,
+            }],
+          });
+        }
+      });
+
+      const startISO = anchor.toISOString().slice(0, 10);
+      const endISO = days.length ? days[days.length - 1].date : startISO;
+      return {
+        config: {
+          start_date: startISO,
+          end_date: endISO,
+          total_weeks: state.weeks,
+          generator: 'lift-planner',
+          template_id: gen.template.id,
+        },
+        days,
+      };
+    }
+
+    // -------- Wizard UI --------
+    // Mirrors the Run Planner shape: form → Generate My Plan → output card.
+    let _liftPlanState = { equipment: new Set(), dows: [] };
+
+    function renderLiftPlanner(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, 'Lifting Plan Generator')]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('programs'),
+      }, '← Back to Programs'));
+
+      // Restore prior selections if any
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem('liftPlanState_v1') || '{}'); } catch(e) {}
+
+      const state = {
+        templateId: saved.templateId || LIFT_TEMPLATES[0].id,
+        days:       saved.days || 3,
+        weeks:      saved.weeks || 8,
+        equipment:  new Set(saved.equipment || ['barbell', 'rack', 'bench', 'dumbbells']),
+        dows:       saved.dows || [],
+      };
+
+      const form = el('div');
+      app.appendChild(form);
+
+      // Template picker card
+      const tmplCard = el('div', { class: 'card' });
+      tmplCard.appendChild(el('h2', {}, 'PICK YOUR TEMPLATE'));
+      LIFT_TEMPLATES.forEach(t => {
+        const selected = state.templateId === t.id;
+        const row = el('div', {
+          class: 'card',
+          style: 'cursor: pointer; padding: 12px; margin: 0 0 8px;'
+               + (selected ? ' border-color: var(--primary); background: rgba(36,80,196,0.06);' : ''),
+          onclick: () => {
+            state.templateId = t.id;
+            state.days = t.daysPerWeek;
+            renderLiftPlanner(document.querySelector('.app')); // simple re-render
+          },
+        }, [
+          el('div', { style: 'font-weight: 700; font-size: 15px;' }, t.name),
+          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; line-height: 1.4;' }, t.description),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 6px; letter-spacing: 0.06em; text-transform: uppercase;' },
+            `${t.daysPerWeek} days / week · ${t.experience}`),
+        ]);
+        tmplCard.appendChild(row);
+      });
+      form.appendChild(tmplCard);
+
+      // Days of week
+      const dowCard = el('div', { class: 'card' });
+      dowCard.appendChild(el('h2', {}, 'WHICH DAYS?'));
+      dowCard.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -8px; margin-bottom: 10px;' },
+        'Optional — pick your training days. Skip and we\'ll spread them evenly.'));
+      const dowRow = el('div', { class: 'plan-dow-row' });
+      ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
+        const on = state.dows.includes(i);
+        const b = el('button', {
+          type: 'button',
+          class: 'plan-dow-btn' + (on ? ' sel' : ''),
+          onclick: () => {
+            const idx = state.dows.indexOf(i);
+            if (idx > -1) state.dows.splice(idx, 1);
+            else state.dows.push(i);
+            b.classList.toggle('sel');
+          },
+        }, d);
+        dowRow.appendChild(b);
+      });
+      dowCard.appendChild(dowRow);
+      form.appendChild(dowCard);
+
+      // Equipment checklist
+      const eqCard = el('div', { class: 'card' });
+      eqCard.appendChild(el('h2', {}, 'YOUR EQUIPMENT'));
+      eqCard.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -8px; margin-bottom: 10px;' },
+        'Check what you have. Exercises get swapped based on your picks.'));
+      LIFT_EQUIPMENT.forEach(e => {
+        const on = state.equipment.has(e.id) || e.alwaysOn;
+        const row = el('label', {
+          style: 'display: flex; align-items: center; gap: 10px; padding: 8px 0; cursor: pointer; border-bottom: 1px solid var(--border);',
+        }, [
+          el('input', {
+            type: 'checkbox',
+            ...(on ? { checked: 'checked' } : {}),
+            ...(e.alwaysOn ? { disabled: 'disabled' } : {}),
+            onchange: (ev) => {
+              if (ev.target.checked) state.equipment.add(e.id);
+              else state.equipment.delete(e.id);
+            },
+          }),
+          el('div', { style: 'font-size: 14px;' }, e.label),
+        ]);
+        eqCard.appendChild(row);
+      });
+      form.appendChild(eqCard);
+
+      // Duration slider
+      const durCard = el('div', { class: 'card' });
+      durCard.appendChild(el('div', { class: 'plan-slider-hdr' }, [
+        el('label', {}, 'Program duration'),
+        el('div', { class: 'plan-slider-val', id: 'lpWksVal' }, [
+          String(state.weeks) + ' ',
+          el('span', {}, 'wks'),
+        ]),
+      ]));
+      const wksInput = el('input', {
+        type: 'range', class: 'plan-range', id: 'lpWks',
+        min: '4', max: '16', value: String(state.weeks),
+        oninput: (e) => {
+          state.weeks = Number(e.target.value);
+          document.getElementById('lpWksVal').innerHTML = `${state.weeks} <span>wks</span>`;
+        },
+      });
+      durCard.appendChild(wksInput);
+      durCard.appendChild(el('div', { class: 'plan-slider-marks' }, [
+        el('span', {}, '4'), el('span', {}, '8'), el('span', {}, '12'), el('span', {}, '16'),
+      ]));
+      form.appendChild(durCard);
+
+      // Generate button
+      const genBtn = el('button', {
+        style: 'margin-top: 8px; width: 100%;',
+        onclick: () => {
+          const cleanState = {
+            templateId: state.templateId,
+            days:       state.days,
+            weeks:      state.weeks,
+            equipment:  [...state.equipment],
+            dows:       state.dows.slice(),
+          };
+          try { localStorage.setItem('liftPlanState_v1', JSON.stringify(cleanState)); } catch(e) {}
+          renderLiftPlanOutput_(app, cleanState);
+        },
+      }, '▶  Generate My Plan');
+      app.appendChild(genBtn);
+
+      const outContainer = el('div', { id: 'lpOutput' });
+      app.appendChild(outContainer);
+    }
+
+    function renderLiftPlanOutput_(app, state) {
+      const gen = generateLiftPlan_(state);
+      const out = document.getElementById('lpOutput') || app;
+      out.innerHTML = '';
+      const template = gen.template;
+
+      out.appendChild(el('div', { class: 'card', style: 'margin-top: 16px;' }, [
+        el('div', { style: 'font-size: 20px; font-weight: 800; letter-spacing: -0.02em;' }, template.name),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
+          `${state.weeks} weeks · ${template.daysPerWeek} sessions / week`),
+      ]));
+
+      // Session cards
+      gen.sessionsBuilt.forEach((sess, i) => {
+        const card = el('div', { class: 'card' }, [
+          el('div', { style: 'font-size: 14px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px;' },
+            sess.name),
+        ]);
+        sess.exercises.forEach(ex => {
+          card.appendChild(el('div', {
+            style: 'display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px;',
+          }, [
+            el('div', {}, [
+              el('div', { style: 'font-weight: 600;' }, ex.name),
+              el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px;' }, ex.muscle || ''),
+            ]),
+            el('div', { style: 'font-weight: 600; white-space: nowrap; align-self: center;' },
+              `${ex.sets} × ${ex.reps}`),
+          ]));
+        });
+        out.appendChild(card);
+      });
+
+      out.appendChild(el('div', { class: 'card', style: 'font-size: 12px; line-height: 1.5;' }, [
+        el('strong', {}, 'Progression:'),
+        el('span', {}, ' Linear. Week 1 baseline. Each following week add 5 lb or +1 rep on compounds; +1 rep on accessories. Every 4th week is a deload (drop weight ~15%, focus on form and recovery). Then repeat with a slightly heavier baseline.'),
+      ]));
+
+      // Save section
+      out.appendChild(el('div', { class: 'card', style: 'margin-top: 8px;' }, [
+        el('div', { style: 'font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px;' },
+          'Save this plan'),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'lpSaveName' }, 'Plan name'),
+          el('input', { id: 'lpSaveName', type: 'text', placeholder: 'e.g. Push/Pull/Legs Q4 2026', value: template.name }),
+        ]),
+        el('div', { class: 'field' }, [
+          el('label', { for: 'lpSaveDate' }, 'Start date'),
+          el('input', { id: 'lpSaveDate', type: 'date', value: todayISO() }),
+        ]),
+        el('div', { style: 'display: flex; gap: 8px; margin-top: 12px;' }, [
+          el('button', { style: 'flex: 1;', onclick: () => lpSaveActivate(state) }, 'Save & Activate'),
+          el('button', {
+            style: 'flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+            onclick: () => lpSaveLibrary(state),
+          }, 'Save to Library'),
+        ]),
+      ]));
+
+      out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    async function lpSaveActivate(state) {
+      const name = (document.getElementById('lpSaveName')?.value || '').trim();
+      const start = (document.getElementById('lpSaveDate')?.value || '').trim() || todayISO();
+      if (!name) return toast('Give the plan a name first', true);
+      try {
+        const conflicts = await conflictingActivesFor_('lift', null, 'training_plans');
+        if (conflicts.length) {
+          const names = conflicts.map(c => `"${c.name}"`).join(', ');
+          const msg = `Activate "${name}"?\n\nThis will deactivate ${names} because ${conflicts.length === 1 ? 'it conflicts' : 'they conflict'} with a lift plan. You can reactivate ${conflicts.length === 1 ? 'it' : 'them'} anytime.`;
+          if (!confirm(msg)) return;
+        }
+        const structure = convertLiftPlanToTrainingPlan_(state, name, start);
+        await sbSaveTrainingPlan({ name, structure, activate: true, planType: 'lift' });
+        toast(`"${name}" is now your active lift plan`);
+        setTimeout(() => render('training-plan'), 700);
+      } catch (e) {
+        toast('Could not save: ' + (e.message || e), true);
+      }
+    }
+    async function lpSaveLibrary(state) {
+      const name = (document.getElementById('lpSaveName')?.value || '').trim();
+      const start = (document.getElementById('lpSaveDate')?.value || '').trim() || todayISO();
+      if (!name) return toast('Give the plan a name first', true);
+      try {
+        const structure = convertLiftPlanToTrainingPlan_(state, name, start);
+        await sbSaveTrainingPlan({ name, structure, activate: false, planType: 'lift' });
+        toast(`Saved "${name}" to your library`);
+        setTimeout(() => render('programs'), 700);
+      } catch (e) {
+        toast('Could not save: ' + (e.message || e), true);
+      }
+    }
+
+    // ========== end v33 Lifting Plan Generator ==========
 
     // -------- Nav --------
     document.querySelectorAll('nav.bottom button').forEach(b => {
