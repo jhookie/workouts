@@ -1840,7 +1840,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.0.3';
+    const APP_VERSION = 'v33.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -9891,6 +9891,30 @@
       { id: 'core_plank',    name: 'Plank',                muscle: 'Core',       equipment: ['bodyweight'],             compound: false },
       { id: 'core_deadbug',  name: 'Dead Bug',             muscle: 'Core',       equipment: ['bodyweight'],             compound: false },
       { id: 'core_hlr',      name: 'Hanging Leg Raise',    muscle: 'Core',       equipment: ['pullup-bar'],             compound: false },
+      // v33.1 additions — support the new templates
+      // Bodyweight + minimal-equipment additions
+      { id: 'bw_pike_pu',    name: 'Pike Push-Ups',        muscle: 'Shoulders',  equipment: ['bodyweight'],             compound: true },
+      { id: 'bw_bulg_sq',    name: 'Bulgarian Split Squat', muscle: 'Legs',      equipment: ['bodyweight'],             compound: true },
+      { id: 'bw_glute_br',   name: 'Glute Bridge',         muscle: 'Glutes',     equipment: ['bodyweight'],             compound: true },
+      { id: 'bw_inv_row',    name: 'Inverted Row',         muscle: 'Back',       equipment: ['bodyweight'],             compound: true },
+      { id: 'bw_side_plank', name: 'Side Plank',           muscle: 'Core',       equipment: ['bodyweight'],             compound: false },
+      // DB isolation
+      { id: 'db_front_raise',name: 'DB Front Raise',       muscle: 'Shoulders',  equipment: ['dumbbells'],              compound: false },
+      { id: 'db_incline_curl', name: 'DB Incline Curl',    muscle: 'Biceps',     equipment: ['dumbbells', 'bench-adj'], compound: false },
+      { id: 'db_skullcrush', name: 'DB Skull Crushers',    muscle: 'Triceps',    equipment: ['dumbbells', 'bench'],     compound: false },
+      { id: 'db_fly',        name: 'DB Chest Fly',         muscle: 'Chest',      equipment: ['dumbbells', 'bench'],     compound: false },
+      { id: 'db_shrug',      name: 'DB Shrug',             muscle: 'Back',       equipment: ['dumbbells'],              compound: false },
+      { id: 'db_calf_raise', name: 'DB Calf Raise',        muscle: 'Calves',     equipment: ['dumbbells'],              compound: false },
+      // Barbell variations for PPL 6-day
+      { id: 'bb_close_bench',name: 'Close-Grip Bench Press', muscle: 'Triceps',  equipment: ['barbell', 'bench'],       compound: true },
+      { id: 'bb_hip_thrust', name: 'Barbell Hip Thrust',   muscle: 'Glutes',     equipment: ['barbell', 'bench'],       compound: true },
+      { id: 'bb_bulg_sq',    name: 'Barbell Bulgarian Split Squat', muscle: 'Legs', equipment: ['barbell'],             compound: true },
+      { id: 'bb_pendlay_row', name: 'Pendlay Row',         muscle: 'Back',       equipment: ['barbell'],                compound: true },
+      // Machine variety
+      { id: 'm_seated_row',  name: 'Seated Row (machine)', muscle: 'Back',       equipment: ['machines'],               compound: true },
+      { id: 'm_chest_press', name: 'Chest Press (machine)', muscle: 'Chest',     equipment: ['machines'],               compound: true },
+      { id: 'm_pec_deck',    name: 'Pec Deck',             muscle: 'Chest',      equipment: ['machines'],               compound: false },
+      { id: 'm_shoulder_press', name: 'Shoulder Press (machine)', muscle: 'Shoulders', equipment: ['machines'],         compound: true },
     ];
 
     // -------- Equipment options (checklist) --------
@@ -9988,6 +10012,144 @@
               { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 3, reps: '10-12' },
               { emphasis: 'ham-iso',          preferMuscle: 'Hamstrings', sets: 3, reps: '10-12' },
               { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'ppl-6',
+        name: 'Push / Pull / Legs — 6 Day',
+        daysPerWeek: 6,
+        experience: 'advanced',
+        description: 'Each movement pattern hit twice per week. High volume, high frequency. Best for advanced lifters with recovery capacity.',
+        sessions: [
+          {
+            name: 'Push Day 1 — Chest Focus',
+            slots: [
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '8-10',  requireCompound: true },
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 3, reps: '8-10',  requireCompound: true },
+              { emphasis: 'push-accessory',   preferMuscle: 'Chest',      sets: 3, reps: '10-12' },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '10-12' },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '12-15' },
+            ],
+          },
+          {
+            name: 'Pull Day 1 — Back Width',
+            slots: [
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 4, reps: '8-10',  requireCompound: true },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 3, reps: '10-12' },
+              { emphasis: 'rear-delt',        preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '10-12' },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '12-15' },
+            ],
+          },
+          {
+            name: 'Legs Day 1 — Quad Focus',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 4, reps: '10-12' },
+              { emphasis: 'lunge-accessory',  preferMuscle: 'Legs',       sets: 3, reps: '10 each' },
+              { emphasis: 'ham-iso',          preferMuscle: 'Hamstrings', sets: 3, reps: '10-12' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+          {
+            name: 'Push Day 2 — Shoulder Focus',
+            slots: [
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '8-10',  requireCompound: true },
+              { emphasis: 'shoulder-iso',     preferMuscle: 'Shoulders',  sets: 4, reps: '12-15' },
+              { emphasis: 'rear-delt',        preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'push-accessory',   preferMuscle: 'Chest',      sets: 3, reps: '10-12' },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '10-12' },
+            ],
+          },
+          {
+            name: 'Pull Day 2 — Back Thickness',
+            slots: [
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 3, reps: '8-10',  requireCompound: true },
+              { emphasis: 'pull-accessory',   preferMuscle: 'Back',       sets: 4, reps: '10-12' },
+              { emphasis: 'rear-delt',        preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '10-12' },
+            ],
+          },
+          {
+            name: 'Legs Day 2 — Posterior Focus',
+            slots: [
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 3, reps: '8-10',  requireCompound: true },
+              { emphasis: 'ham-iso',          preferMuscle: 'Hamstrings', sets: 4, reps: '10-12' },
+              { emphasis: 'leg-accessory',    preferMuscle: 'Legs',       sets: 3, reps: '10-12' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30s' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'home-gym-3',
+        name: 'Home Gym Minimalist — 3 Day',
+        daysPerWeek: 3,
+        experience: 'novice',
+        description: 'Full-body sessions built for dumbbells + bodyweight only. No barbell, no rack, no machines required. Perfect for apartment gyms or travel.',
+        sessions: [
+          {
+            name: 'Day A — Push + Legs',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '8-12',  requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '8-12',  requireCompound: true },
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 3, reps: '8-12',  requireCompound: true },
+              { emphasis: 'triceps-iso',      preferMuscle: 'Triceps',    sets: 3, reps: '10-15' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30-45s' },
+            ],
+          },
+          {
+            name: 'Day B — Pull + Core',
+            slots: [
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 4, reps: '8-10',  requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 3, reps: '6-10',  requireCompound: true },
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 3, reps: '10-12', requireCompound: true },
+              { emphasis: 'biceps-iso',       preferMuscle: 'Biceps',     sets: 3, reps: '10-15' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30-45s' },
+            ],
+          },
+          {
+            name: 'Day C — Full Body',
+            slots: [
+              { emphasis: 'lunge-accessory',  preferMuscle: 'Legs',       sets: 3, reps: '10 each' },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 3, reps: '10-15', requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 3, reps: '6-10',  requireCompound: true },
+              { emphasis: 'shoulder-iso',     preferMuscle: 'Shoulders',  sets: 3, reps: '12-15' },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30-45s' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'full-body-2',
+        name: 'Full Body — 2 Day',
+        daysPerWeek: 2,
+        experience: 'novice',
+        description: 'For the time-crunched. Two big full-body sessions per week — enough to maintain strength and slowly build if you have less than 90 minutes total training time.',
+        sessions: [
+          {
+            name: 'Full Body A',
+            slots: [
+              { emphasis: 'squat-compound',   preferMuscle: 'Legs',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'push-compound',    preferMuscle: 'Chest',      sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'pull-compound',    preferMuscle: 'Back',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30-45s' },
+            ],
+          },
+          {
+            name: 'Full Body B',
+            slots: [
+              { emphasis: 'hinge-compound',   preferMuscle: 'Hamstrings', sets: 4, reps: '5-6',   requireCompound: true },
+              { emphasis: 'press-compound',   preferMuscle: 'Shoulders',  sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'row-compound',     preferMuscle: 'Back',       sets: 4, reps: '6-8',   requireCompound: true },
+              { emphasis: 'core',             preferMuscle: 'Core',       sets: 3, reps: '30-45s' },
             ],
           },
         ],
