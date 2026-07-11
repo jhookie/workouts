@@ -1803,7 +1803,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v32.4.4';
+    const APP_VERSION = 'v32.4.5';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3727,7 +3727,7 @@
             // users expect from the Today's Workout tile. Only fall back
             // to the plan viewer when there's no obvious logger (unknown
             // session type or future-dated).
-            const rowClick = () => {
+            const rowClick = async () => {
               if (!isToday) {
                 _trainingPlanViewDate = shownDay.date;
                 return render('training-plan');
@@ -3735,15 +3735,27 @@
               const sessions = shownDay.sessions || [];
               const liftIdx = sessions.findIndex(s => s.type === 'lift');
               const runIdx  = sessions.findIndex(s => s.type === 'run');
-              // Prefer lift over run when both are on the same day —
-              // the run screen doesn't yet auto-prefill from plan sessions.
               if (liftIdx !== -1) {
+                // v32.4.5: same "already logged?" check as renderLift so
+                // the Today's Workout row and the Lift tile behave the
+                // same way — route to the completed session view when
+                // the workout is already logged.
+                const sessionName = sessions[liftIdx].name;
+                try {
+                  const existing = await sbGetLiftSession(shownDay.date, sessionName);
+                  if (existing) {
+                    _liftSessionRef = { date: shownDay.date, day: sessionName };
+                    _liftAutoRouteReturnTo = 'home';
+                    return render('lift-session');
+                  }
+                } catch (e) { /* fall through to log form */ }
                 _planLogRef = {
                   date: shownDay.date,
                   sessionIndex: liftIdx,
                   session: sessions[liftIdx],
                   dayEntry: shownDay,
                 };
+                _liftAutoRouteReturnTo = 'home';
                 return render('plan-log-lift');
               }
               if (runIdx !== -1) return render('run');
@@ -7470,6 +7482,8 @@
                   || 'training-plan';
       const backLabel2 = backTo2 === 'home' ? '← Back to Home'
                        : backTo2 === 'calendar' ? '← Back to Calendar'
+                       : backTo2 === 'programs' ? '← Back to Programs'
+                       : backTo2 === 'training-plan' ? '← Back to plan'
                        : '← Back to plan';
       app.appendChild(el('button', {
         class: 'btn-link',
