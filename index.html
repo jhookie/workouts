@@ -315,7 +315,10 @@
     button.ghost { background: transparent; color: var(--accent); }
     button.danger { background: var(--danger); }
 
-    input, select, textarea {
+    /* Global input styling excludes checkboxes/radios so their native
+       styling still works. Custom checkboxes (like the walk-break toggle)
+       opt-in via their own selectors. */
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea {
       background: #FFFFFF;
       color: var(--text);
       border: 1px solid var(--border);
@@ -326,6 +329,28 @@
       width: 100%;
       -webkit-appearance: none;
       appearance: none;
+    }
+    /* v33.0.1: consistent custom checkbox look everywhere. Blue-filled
+       when checked with a white checkmark. Reliable across browsers. */
+    input[type="checkbox"] {
+      -webkit-appearance: none; appearance: none;
+      width: 20px; height: 20px; margin: 0; flex-shrink: 0;
+      border: 2px solid var(--border); border-radius: 4px;
+      background: #FFFFFF; cursor: pointer; position: relative;
+      transition: border-color 0.15s, background 0.15s;
+      padding: 0;
+    }
+    input[type="checkbox"]:checked {
+      background: var(--primary); border-color: var(--primary);
+    }
+    input[type="checkbox"]:checked::after {
+      content: ''; position: absolute;
+      left: 5px; top: 1px; width: 6px; height: 11px;
+      border: solid #FFFFFF; border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    input[type="checkbox"]:disabled {
+      background: var(--surface-2); border-color: var(--border); cursor: not-allowed;
     }
     input[inputmode="decimal"], input[inputmode="numeric"] { text-align: center; }
     input:focus, select:focus, textarea:focus {
@@ -1815,7 +1840,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33';
+    const APP_VERSION = 'v33.0.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3896,7 +3921,22 @@
                 _liftAutoRouteReturnTo = 'home';
                 return render('plan-log-lift');
               }
-              if (runIdx !== -1) return render('run');
+              if (runIdx !== -1) {
+                // v33.0.1: check if a run's already logged for today.
+                // If yes, route to run-edit for the existing row (view +
+                // edit). No dedicated "run session detail" view exists,
+                // so run-edit is the natural target.
+                try {
+                  const { data: existingRuns } = await _sb.from('runs')
+                    .select('id').eq('user_id', currentUser.id)
+                    .eq('date', shownDay.date).limit(1);
+                  if (existingRuns && existingRuns.length) {
+                    _runEditRef = { id: existingRuns[0].id };
+                    return render('run-edit');
+                  }
+                } catch (e) { /* fall through to blank log form */ }
+                return render('run');
+              }
               _trainingPlanViewDate = shownDay.date;
               return render('training-plan');
             };
@@ -10152,19 +10192,27 @@
       const form = el('div');
       app.appendChild(form);
 
-      // Template picker card
+      // Template picker card. v33.0.1: don't re-render the whole screen
+      // on tap — just toggle the visual highlight in place and update
+      // state. Previous version called renderLiftPlanner() recursively
+      // which appended a fresh copy of the form each time, so users saw
+      // the whole page repeat with each tap.
       const tmplCard = el('div', { class: 'card' });
       tmplCard.appendChild(el('h2', {}, 'PICK YOUR TEMPLATE'));
+      const tmplRows = [];
+      const applyTemplateSelectionStyle = (row, isSelected) => {
+        row.style.cssText = 'cursor: pointer; padding: 12px; margin: 0 0 8px;'
+          + (isSelected ? ' border-color: var(--primary); background: rgba(36,80,196,0.06);' : '');
+      };
       LIFT_TEMPLATES.forEach(t => {
-        const selected = state.templateId === t.id;
+        const isSelected = state.templateId === t.id;
         const row = el('div', {
           class: 'card',
-          style: 'cursor: pointer; padding: 12px; margin: 0 0 8px;'
-               + (selected ? ' border-color: var(--primary); background: rgba(36,80,196,0.06);' : ''),
           onclick: () => {
             state.templateId = t.id;
             state.days = t.daysPerWeek;
-            renderLiftPlanner(document.querySelector('.app')); // simple re-render
+            // Update highlights in place — no re-render.
+            tmplRows.forEach(({ row: r, id }) => applyTemplateSelectionStyle(r, id === t.id));
           },
         }, [
           el('div', { style: 'font-weight: 700; font-size: 15px;' }, t.name),
@@ -10172,6 +10220,8 @@
           el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 6px; letter-spacing: 0.06em; text-transform: uppercase;' },
             `${t.daysPerWeek} days / week · ${t.experience}`),
         ]);
+        applyTemplateSelectionStyle(row, isSelected);
+        tmplRows.push({ row, id: t.id });
         tmplCard.appendChild(row);
       });
       form.appendChild(tmplCard);
