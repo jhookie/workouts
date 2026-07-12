@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.3';
+    const APP_VERSION = 'v33.4';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -5744,7 +5744,8 @@
         subtitle: preview,
         right: `${exCount} ex · ${totalReps} reps`,
         onClick: () => {
-          _liftSessionRef = { date: s.date, day: s.day };
+          // v33.4: include id so duplicate-name lifts disambiguate.
+          _liftSessionRef = { date: s.date, day: s.day, id: s.id };
           render('lift-session');
         },
       };
@@ -5873,7 +5874,8 @@
           el('button', {
             style: 'margin-top: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; font-size: 12px; width: auto;',
             onclick: () => {
-              _liftSessionRef = { date: day.date, day: lift.day };
+              // v33.4: include id so duplicate-name lifts disambiguate.
+              _liftSessionRef = { date: day.date, day: lift.day, id: lift.id };
               render('lift-session');
             },
           }, 'View session →'),
@@ -6011,14 +6013,24 @@
     // -------- Lift Session detail screen --------
     let _liftSessionRef = null; // { date, day } set by Calendar tap
 
-    async function sbGetLiftSession(date, day) {
+    // v33.4 (post-v33.3 test): a user can legitimately log the same
+    // session name twice on one day (morning + evening, or duplicate
+    // taps). The old .maybeSingle() query threw "multiple (or no) rows
+    // returned" in that case. Now: prefer id-based lookup (via
+    // sbGetLiftSessionById) when the caller has an id, and fall back
+    // to array-select-newest for date+day queries.
+    async function sbGetLiftSession(date, day, id) {
+      if (id) {
+        return sbGetLiftSessionById(id);
+      }
       const uid = currentUser.id;
       const { data, error } = await _sb.from('lift_sessions')
         .select('id,date,block_name,week,day,exercises,notes,created_at')
         .eq('user_id', uid).eq('date', date).eq('day', day)
-        .maybeSingle();
+        .order('created_at', { ascending: false })
+        .limit(1);
       if (error) throw new Error(error.message);
-      return data;
+      return (data && data[0]) || null;
     }
 
     async function renderLiftSession(app) {
@@ -6058,7 +6070,10 @@
       app.appendChild(skel);
 
       let session;
-      try { session = await sbGetLiftSession(ref.date, ref.day); }
+      // v33.4: pass ref.id when we have it so days with two same-named
+      // sessions (e.g. two "Bench" sessions on the same date) resolve
+      // deterministically to the tapped row.
+      try { session = await sbGetLiftSession(ref.date, ref.day, ref.id); }
       catch (e) {
         skel.remove();
         app.appendChild(el('div', { class: 'card' }, 'Could not load session: ' + e.message));
@@ -8603,7 +8618,13 @@
           try {
             await sbLogLiftFreeform(entries, meta);
             toast('Session logged');
-            setTimeout(() => render('calendar'), 600);
+            // v33.4 fix: freeform save landed on Calendar regardless of
+            // caller. Home → Log lift → Save should go back to Home. Use
+            // the same editBackTo_-style logic — capture the previous
+            // real view before the render() fires.
+            const skip = new Set(['lift-freeform', 'lift', 'plan-log-lift']);
+            const back = (_previousView && !skip.has(_previousView) && !_previousView.startsWith('lift-')) ? _previousView : 'home';
+            setTimeout(() => render(back), 600);
           } catch (e) {
             toast('Could not save: ' + (e.message || e), true);
           }
