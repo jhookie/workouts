@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.2';
+    const APP_VERSION = 'v33.3';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2630,27 +2630,42 @@
       })();
 
       // All — cross-modal summary
+      // v33.3: apply the modality filter consistently across ALL analytics
+      // surfaces so the "Sessions by Modality" chart, totals, and tabs
+      // agree. Previously the tabs were filtered but the chart / summary
+      // still counted everything, which read as inconsistent. Pre-onboarding
+      // users (modsUnset) still see everything so nothing silently drops.
+      const runsScoped   = modAllows('running')  ? runs  : [];
+      const walksScoped  = modAllows('walking')  ? walks : [];
+      const ridesScoped  = modAllows('cycling')  ? acts.filter(a => a.activity_type === 'cycling') : [];
+      const hikesScoped  = modAllows('hiking')   ? acts.filter(a => a.activity_type === 'hiking')  : [];
+      const swimsScoped  = modAllows('swimming') ? acts.filter(a => a.activity_type === 'swimming') : [];
+      const otherActsScoped = modsUnset ? acts.filter(a => !['cycling','hiking','swimming'].includes(a.activity_type)) : [];
+      const liftsScoped  = modAllows('strength') ? lifts : [];
+      const pullsScoped  = userMods.has('pullups') ? pulls : []; // pullups is opt-in only
+
+      const scopedActs = [...ridesScoped, ...hikesScoped, ...swimsScoped, ...otherActsScoped];
       const dateSet = new Set();
-      [runs, walks, acts, lifts, pulls].forEach(arr =>
+      [runsScoped, walksScoped, scopedActs, liftsScoped, pullsScoped].forEach(arr =>
         arr.forEach(r => dateSet.add(r.date)));
       const allData = {
         summary: {
-          totalSessions: runs.length + walks.length + acts.length + lifts.length + pulls.length,
+          totalSessions: runsScoped.length + walksScoped.length + scopedActs.length + liftsScoped.length + pullsScoped.length,
           activeDays: dateSet.size,
           totalMiles: roundTo(
-            runs.reduce((s, r) => s + Number(r.distance || 0), 0) +
-            walks.reduce((s, r) => s + Number(r.distance || 0), 0) +
-            acts.filter(a => a.activity_type !== 'swimming').reduce((s, r) => s + Number(r.distance || 0), 0)
+            runsScoped.reduce((s, r) => s + Number(r.distance || 0), 0) +
+            walksScoped.reduce((s, r) => s + Number(r.distance || 0), 0) +
+            scopedActs.filter(a => a.activity_type !== 'swimming').reduce((s, r) => s + Number(r.distance || 0), 0)
           , 1),
         },
         byModality: [
-          { key: 'run',    label: 'Runs',      count: runs.length },
-          { key: 'walk',   label: 'Walks',     count: walks.length },
-          { key: 'ride',   label: 'Rides',     count: acts.filter(a => a.activity_type === 'cycling').length },
-          { key: 'hike',   label: 'Hikes',     count: acts.filter(a => a.activity_type === 'hiking').length },
-          { key: 'swim',   label: 'Swims',     count: acts.filter(a => a.activity_type === 'swimming').length },
-          { key: 'lift',   label: 'Lifts',     count: lifts.length },
-          { key: 'pullups',label: 'Pull-Ups',  count: pulls.length },
+          { key: 'run',    label: 'Runs',      count: runsScoped.length },
+          { key: 'walk',   label: 'Walks',     count: walksScoped.length },
+          { key: 'ride',   label: 'Rides',     count: ridesScoped.length },
+          { key: 'hike',   label: 'Hikes',     count: hikesScoped.length },
+          { key: 'swim',   label: 'Swims',     count: swimsScoped.length },
+          { key: 'lift',   label: 'Lifts',     count: liftsScoped.length },
+          { key: 'pullups',label: 'Pull-Ups',  count: pullsScoped.length },
         ].filter(m => m.count > 0),
       };
 
@@ -3444,6 +3459,34 @@
       abbrev.forEach(([re, expand]) => { x = x.replace(re, expand); });
       // 5) Collapse whitespace again after expansion.
       x = x.replace(/\s+/g, ' ').trim();
+      // 6) v33.3 (Bug #3 followup): "assumed press" rule for common lifts
+      //    where the trailing "press" is often dropped in shorthand.
+      //    Folds "dumbbell bench" and "dumbbell bench press" together
+      //    without merging distinct exercises like "leg press" and "leg".
+      //    Only appends when the last word is one of a curated safe list.
+      const impliedPress = /^(.*\b(?:bench|incline bench|decline bench|overhead|shoulder|chest|floor))$/;
+      if (impliedPress.test(x) && !/\bpress\b/.test(x)) x = x + ' press';
+      // 7) Strip trailing "s" on a small set of common plural exercises so
+      //    "dips" and "dip", "pull ups" and "pull up" bucket together.
+      x = x
+        .replace(/\bdips\b/g,     'dip')
+        .replace(/\bpull ups\b/g, 'pull up')
+        .replace(/\bpushups\b/g,  'push up')
+        .replace(/\bpush ups\b/g, 'push up')
+        .replace(/\bchin ups\b/g, 'chin up')
+        .replace(/\brows\b/g,     'row')
+        .replace(/\bcurls\b/g,    'curl')
+        .replace(/\bsquats\b/g,   'squat')
+        .replace(/\bdeadlifts\b/g,'deadlift')
+        .replace(/\blunges\b/g,   'lunge')
+        .replace(/\bpresses\b/g,  'press');
+      // 8) Strip common load/style suffixes that don't change what exercise
+      //    it is: "bodyweight", "weighted". These usually appear as a note
+      //    for the same movement.
+      x = x
+        .replace(/\bbodyweight\b/g, '')
+        .replace(/\bweighted\b/g,   '')
+        .replace(/\s+/g, ' ').trim();
       return x;
     }
 
@@ -4712,6 +4755,19 @@
         el('h1', {}, 'Log Run'),
         el('span', { class: 'date' }, fmtDateLong(new Date())),
       ]));
+      // v33.3 fix (Bug #4 followup): Log Run form was headerless / no way
+      // back. Mirror the Lift screen's back-link so users can bail out
+      // when the auto-route doesn't fire (no run logged today).
+      const backToRun = preRunView && !['run', 'run-edit'].includes(preRunView) ? preRunView : 'home';
+      const backRunLabel = backToRun === 'home' ? '← Back to Home'
+                         : backToRun === 'calendar' ? '← Back to Calendar'
+                         : backToRun === 'training-plan' ? '← Back to plan'
+                         : '← Back';
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render(backToRun),
+      }, backRunLabel));
 
       if (prefill) {
         app.appendChild(el('div', {
@@ -5967,15 +6023,26 @@
 
     async function renderLiftSession(app) {
       const ref = _liftSessionRef;
+      // v33.3 fix (Bug #6 followup): if we land here with no ref
+      // (typically because a caller cleared it and re-navigated), silently
+      // redirect to Calendar instead of showing the "No session selected"
+      // dead-end card. This is the last-hop of the Save→Back chain that
+      // used to strand users on a headerless screen.
+      if (!ref) return render('calendar');
+
       app.appendChild(el('header', { class: 'top' }, [
         el('h1', {}, 'Lift session'),
       ]));
       // v32.4.4: prefer auto-route return-to (Home users who tapped Lift
       // after already logging today land here), then previous view.
+      // v33.3: also filter 'lift-edit' out of _previousView candidates —
+      // when the user reaches this screen via Save (edit → save → session
+      // detail), _previousView is 'lift-edit', and letting it through
+      // routed Back into an empty edit view.
       const autoBack = _liftAutoRouteReturnTo;
       _liftAutoRouteReturnTo = null;
       const backLS = autoBack
-                    || (_previousView && !['lift-session', 'lift'].includes(_previousView) ? _previousView : null)
+                    || (_previousView && !['lift-session', 'lift', 'lift-edit'].includes(_previousView) ? _previousView : null)
                     || 'calendar';
       const backLSLabel = backLS === 'home' ? '← Back to Home'
                         : backLS === 'programs' ? '← Back to Programs'
@@ -5986,11 +6053,6 @@
         style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
         onclick: () => { _liftSessionRef = null; render(backLS); },
       }, backLSLabel));
-
-      if (!ref) {
-        app.appendChild(el('div', { class: 'card' }, 'No session selected.'));
-        return;
-      }
 
       const skel = el('div', { class: 'card' }, el('div', { class: 'skeleton', style: 'height: 200px;' }));
       app.appendChild(skel);
@@ -8080,17 +8142,15 @@
     async function renderLiftEdit(app) {
       const ref = _liftEditRef;
       if (!ref || !ref.sessionId) {
-        // v33.2 fix: after Save, _liftEditRef is cleared and the router
-        // navigates to Calendar. But native browser Back can pop back to
-        // this route with a null ref, which used to leave the user on an
-        // empty "No session selected" card with no nav-tab highlight.
-        // Instead, silently redirect to the sensible caller: the session
-        // detail if it's still open, otherwise the previous view, else
-        // Calendar. Skip our own view so we don't loop.
-        const fallback = (_liftSessionRef && 'lift-session')
-                      || (_previousView && !['lift-edit'].includes(_previousView) ? _previousView : null)
-                      || 'calendar';
-        return render(fallback);
+        // v33.3 fix (Bug #6 followup): stricter fallback so we never end
+        // up on a stranded screen. Only route back to the session detail
+        // when we have a meaningful session ref (date + day set);
+        // otherwise go straight to Calendar. This avoids the two-hop
+        // bug where lift-session's Back-to-calendar cleared _liftSessionRef
+        // then routed to us, and we bounced back to lift-session which
+        // showed "No session selected."
+        if (_liftSessionRef && _liftSessionRef.date) return render('lift-session');
+        return render('calendar');
       }
 
       app.appendChild(el('header', { class: 'top' }, [
@@ -8670,8 +8730,9 @@
                 pace, notes: notes || null, shoe_id: shoeId,
               });
               toast('Run updated');
+              const back = editBackTo_(); // v33.3 (Bug #5 followup): also honor caller on Save
               _runEditRef = null;
-              setTimeout(() => render('calendar'), 500);
+              setTimeout(() => render(back), 500);
             } catch (e) { toast('Could not save: ' + e.message, true); }
           },
         }, 'Save changes'),
@@ -8679,8 +8740,10 @@
       deleteButton_(app, async () => {
         await sbDeleteRow('runs', row.id);
         toast('Run deleted');
+        // v33.3: after delete, return to the caller instead of Calendar.
+        const back = editBackTo_();
         _runEditRef = null;
-        setTimeout(() => render('calendar'), 500);
+        setTimeout(() => render(back), 500);
       });
     }
 
@@ -8722,8 +8785,9 @@
                 date: newDate, distance, duration_secs: dur || null, notes: notes || null,
               });
               toast('Walk updated');
+              const back = editBackTo_();
               _walkEditRef = null;
-              setTimeout(() => render('calendar'), 500);
+              setTimeout(() => render(back), 500);
             } catch (e) { toast('Could not save: ' + e.message, true); }
           },
         }, 'Save changes'),
@@ -8731,8 +8795,9 @@
       deleteButton_(app, async () => {
         await sbDeleteRow('walks', row.id);
         toast('Walk deleted');
+        const back = editBackTo_();
         _walkEditRef = null;
-        setTimeout(() => render('calendar'), 500);
+        setTimeout(() => render(back), 500);
       });
     }
 
@@ -8796,8 +8861,9 @@
               intensity, notes: notes || null,
             });
             toast('Activity updated');
+            const back = editBackTo_();
             _activityEditRef = null;
-            setTimeout(() => render('calendar'), 500);
+            setTimeout(() => render(back), 500);
           } catch (e) { toast('Could not save: ' + e.message, true); }
         },
       }, 'Save changes'));
@@ -8805,8 +8871,9 @@
       deleteButton_(app, async () => {
         await sbDeleteRow('activities', row.id);
         toast('Activity deleted');
+        const back = editBackTo_();
         _activityEditRef = null;
-        setTimeout(() => render('calendar'), 500);
+        setTimeout(() => render(back), 500);
       });
     }
 
@@ -8855,8 +8922,9 @@
                 date: newDate, sets: newSets, total_reps: total, notes: notes || null,
               });
               toast('Pull-ups updated');
+              const back = editBackTo_();
               _pullupsEditRef = null;
-              setTimeout(() => render('calendar'), 500);
+              setTimeout(() => render(back), 500);
             } catch (e) { toast('Could not save: ' + e.message, true); }
           },
         }, 'Save changes'),
@@ -8864,8 +8932,9 @@
       deleteButton_(app, async () => {
         await sbDeleteRow('pullup_sessions', row.id);
         toast('Pull-ups deleted');
+        const back = editBackTo_();
         _pullupsEditRef = null;
-        setTimeout(() => render('calendar'), 500);
+        setTimeout(() => render(back), 500);
       });
     }
 
