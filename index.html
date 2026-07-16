@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.0';
+    const APP_VERSION = 'v34.0.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3569,6 +3569,8 @@
     // legitimate users — we'd rather have an over-permissive gate
     // during a transient error than a wrong-side-of-the-door beta
     // user emailing support at 11pm.
+    // v34.0.1: log more diagnostic info when the query fails so
+    // "why did an unknown email get through" is answerable.
     async function isEmailAllowed_(email) {
       const norm = String(email || '').trim().toLowerCase();
       if (!norm) return false;
@@ -3576,14 +3578,32 @@
         const { data, error } = await _sb.from('beta_allowlist')
           .select('email').eq('email', norm).maybeSingle();
         if (error) {
-          console.warn('allow-list check failed; failing open:', error.message);
+          console.warn('[allow-list] check failed; failing open. code:', error.code, 'message:', error.message, 'full:', error);
           return true;
         }
+        console.info('[allow-list] check for', norm, '→', data ? 'ALLOWED' : 'REJECTED');
         return !!data;
       } catch (e) {
-        console.warn('allow-list check threw; failing open:', e);
+        console.warn('[allow-list] check threw; failing open:', e);
         return true;
       }
+    }
+
+    // v34.0.1: extract a human-readable string from arbitrary error
+    // shapes (Supabase AuthError, plain Error, empty object, string).
+    // Fixes the "red toast shows {}" bug when Supabase returned an
+    // error with no .message field.
+    function errorMessage_(err, fallback) {
+      if (!err) return fallback || 'Something went wrong';
+      if (typeof err === 'string') return err;
+      if (err.message && typeof err.message === 'string' && err.message.trim()) return err.message;
+      if (err.error_description) return err.error_description;
+      if (err.error && typeof err.error === 'string') return err.error;
+      try {
+        const s = JSON.stringify(err);
+        if (s && s !== '{}') return s;
+      } catch (e) {}
+      return fallback || 'Something went wrong';
     }
 
     async function authSendCode() {
@@ -3623,7 +3643,9 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
       const { error } = await _sb.auth.signInWithOtp({ email });
       if (error) {
-        toast(error.message, true);
+        // v34.0.1: use errorMessage_ so users see something meaningful
+        // instead of "{}" when Supabase returns a bare error object.
+        toast(errorMessage_(error, 'Could not send code. Try again.'), true);
         if (btn) { btn.disabled = false; btn.textContent = 'Send code'; }
         return;
       }
@@ -3662,7 +3684,7 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
       const { error } = await _sb.auth.verifyOtp({ email: _authEmail, token: code, type: 'email' });
       if (error) {
-        toast(error.message, true);
+        toast(errorMessage_(error, 'Could not verify code. Try again.'), true);
         if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
         return;
       }
