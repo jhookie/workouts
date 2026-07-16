@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.5';
+    const APP_VERSION = 'v34.0';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3562,11 +3562,64 @@
       setTimeout(() => { const e = document.getElementById('auth-email'); if (e) e.focus(); }, 50);
     }
 
+    // v34.0: beta allow-list gate. Query the beta_allowlist table
+    // for the user's normalized email. Returns true if the email is
+    // on the list, false otherwise. Fails OPEN (returns true) if the
+    // query itself errors so a Supabase outage doesn't lock out
+    // legitimate users — we'd rather have an over-permissive gate
+    // during a transient error than a wrong-side-of-the-door beta
+    // user emailing support at 11pm.
+    async function isEmailAllowed_(email) {
+      const norm = String(email || '').trim().toLowerCase();
+      if (!norm) return false;
+      try {
+        const { data, error } = await _sb.from('beta_allowlist')
+          .select('email').eq('email', norm).maybeSingle();
+        if (error) {
+          console.warn('allow-list check failed; failing open:', error.message);
+          return true;
+        }
+        return !!data;
+      } catch (e) {
+        console.warn('allow-list check threw; failing open:', e);
+        return true;
+      }
+    }
+
     async function authSendCode() {
       const emailEl = document.getElementById('auth-email');
       const email = (emailEl ? emailEl.value : '').trim();
       if (!email || !email.includes('@')) { toast('Enter a valid email address', true); return; }
       const btn = document.getElementById('auth-send-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      // v34.0: check the beta allow-list BEFORE requesting a magic
+      // code. Rejecting here means unauthorized users never receive
+      // a confusing "you got a code but it doesn't work" email.
+      const allowed = await isEmailAllowed_(email);
+      if (!allowed) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Send code'; }
+        const card = document.getElementById('auth-card');
+        if (card) {
+          card.innerHTML = '';
+          card.appendChild(el('div', { class: 'auth-confirm', style: 'text-align: left;' }, [
+            el('div', { class: 'auth-check', style: 'text-align: center;' }, '🔒'),
+            el('p', { style: 'margin: 12px 0; font-size: 15px; line-height: 1.5;' }, [
+              el('strong', {}, 'Loggbok is in private beta.'),
+              el('br', {}),
+              el('br', {}),
+              document.createTextNode('This email isn\'t on the list yet. Email '),
+              el('a', { href: 'mailto:jeff@loggbok.co?subject=Loggbok beta access', style: 'color: var(--primary); text-decoration: underline;' }, 'jeff@loggbok.co'),
+              document.createTextNode(' if you\'d like access.'),
+            ]),
+          ]));
+          card.appendChild(el('button', {
+            class: 'btn',
+            style: 'background: var(--surface-2); color: var(--text); border: 1px solid var(--border); margin-top: 8px;',
+            onclick: () => renderAuth($('#app')),
+          }, 'Try a different email'));
+        }
+        return;
+      }
       if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
       const { error } = await _sb.auth.signInWithOtp({ email });
       if (error) {
