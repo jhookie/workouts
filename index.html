@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v33.4';
+    const APP_VERSION = 'v33.5';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -2396,11 +2396,12 @@
       if (actTypeSet.has('hiking')   && modAllows('hiking'))   availableTypes.push('hike');
       if (actTypeSet.has('swimming') && modAllows('swimming')) availableTypes.push('swim');
       if (lifts.length && modAllows('strength'))  availableTypes.push('lift');
-      // Pull-Ups is deprecated as a standalone modality (v20.2). Only surface
-      // the Analytics tab when the user has legacy 'pullups' modality still
-      // selected AND has residual data. Otherwise the historical data folds
-      // into Strength via lift_sessions and doesn't need its own tab.
-      if (pulls.length && userMods.has('pullups')) availableTypes.push('pullups');
+      // v33.5: pull-ups is fully folded into Strength. Users who want to
+      // track pull-ups log them as an exercise inside a Lift session (they
+      // then show up in Top Exercises + Exercise Progression). The
+      // dedicated tab is gone. Historical pull_up_sessions data still
+      // lives in the DB — just not surfaced separately.
+      // (previously: `if (pulls.length && userMods.has('pullups')) push('pullups')`)
 
       // Compose a human-readable list of the distance-bearing modalities the
       // user actually has — replaces the vague blanket "activities" label
@@ -2642,7 +2643,7 @@
       const swimsScoped  = modAllows('swimming') ? acts.filter(a => a.activity_type === 'swimming') : [];
       const otherActsScoped = modsUnset ? acts.filter(a => !['cycling','hiking','swimming'].includes(a.activity_type)) : [];
       const liftsScoped  = modAllows('strength') ? lifts : [];
-      const pullsScoped  = userMods.has('pullups') ? pulls : []; // pullups is opt-in only
+      const pullsScoped  = []; // v33.5: pull-ups folded into Strength; don't surface separately
 
       const scopedActs = [...ridesScoped, ...hikesScoped, ...swimsScoped, ...otherActsScoped];
       const dateSet = new Set();
