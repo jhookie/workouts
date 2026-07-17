@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.0.2';
+    const APP_VERSION = 'v34.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3710,7 +3710,7 @@
       // 'plan' (Run Planner) is now a sub-view of Programs; 'training-plan'
       // (imported plan viewer) is reachable from multiple places but
       // conceptually belongs to Programs too.
-      const programsSubviews = new Set(['plan', 'training-plan', 'training-plan-detail', 'lift-planner']);
+      const programsSubviews = new Set(['plan', 'training-plan', 'training-plan-detail', 'lift-planner', 'coach-plan']);
       const navView = isLoggerView ? 'home'
                     : programsSubviews.has(view) ? 'programs'
                     : view;
@@ -3751,6 +3751,7 @@
       else if (view === 'modalities') await renderModalities(app);
       else if (view === 'lift-planner') renderLiftPlanner(app);
       else if (view === 'plan') renderPlan(app);
+      else if (view === 'coach-plan') renderCoachPlan(app);
     }
 
     function renderSetup(app) {
@@ -6647,11 +6648,27 @@
         onclick: () => render('plan'),
       }, [
         el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
-          el('div', { style: 'font-weight: 600; font-size: 15px;' }, 'Run Planner'),
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, 'Run Planner — Quick'),
           el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
         ]),
         el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
-          'Generate a personalized running plan from 1 mile to Half Marathon. Pick a distance, fitness level, and days per week — get a full week-by-week schedule.'),
+          'Personalized running plan in a few taps. Pick distance, level, days per week — get a full week-by-week schedule.'),
+      ]));
+      // v34.1: Coach's Edition — VDOT-based, race-anchored, per-week narratives
+      builderWrap.appendChild(el('div', {
+        class: 'card',
+        style: 'cursor: pointer; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));',
+        onclick: () => render('coach-plan'),
+      }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+          el('div', {}, [
+            el('div', { style: 'font-weight: 700; font-size: 15px;' }, "Run Planner — Coach's Edition"),
+            el('div', { style: 'font-size: 10px; color: var(--primary); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; margin-top: 2px;' }, 'VDOT · Race-anchored · Coaching notes'),
+          ]),
+          el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
+        ]),
+        el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
+          'Jack Daniels VDOT paces from a recent race, taper anchored to race day, per-week coaching narratives explaining why each week looks the way it does.'),
       ]));
       // v33: Lifting Plan Generator
       builderWrap.appendChild(el('div', {
@@ -11008,6 +11025,725 @@
     }
 
     // ========== end v33 Lifting Plan Generator ==========
+
+    // ========== v34.1 Coach's Edition — Run Planner ==========
+    //
+    // A more thorough running-plan generator built on top of Jack Daniels'
+    // VDOT methodology. Adds four things the base Run Planner doesn't have:
+    //   1. VDOT-derived pace zones (E / M / T / I / R) from a recent race
+    //   2. Race-date anchor (peaks + tapers land on race week automatically)
+    //   3. Per-week coaching narratives explaining WHY each week looks
+    //      the way it does
+    //   4. Freeform injury/limitation note captured with the plan
+    //   5. Soft session-length target with warnings when exceeded
+    //
+    // Coexists with the base Run Planner as a second builder card.
+
+    // ---- VDOT + pace zone math -----------------------------------
+    // Reference: Daniels' Running Formula (3rd ed.), Ch. 5.
+    // Distances in meters for the standard races we support.
+    const COACH_RACE_METERS = {
+      '1mi': 1609.34, '2mi': 3218.69, '5k': 5000, '4mi': 6437.38,
+      '5mi': 8046.72, '10k': 10000, '15k': 15000, '10mi': 16093.4,
+      'hm':  21097.5, 'm':   42195,
+    };
+    const COACH_RACE_LABELS = {
+      '1mi': '1 Mile', '2mi': '2 Miles', '5k': '5K', '4mi': '4 Miles',
+      '5mi': '5 Miles', '10k': '10K', '15k': '15K', '10mi': '10 Miles',
+      'hm':  'Half Marathon', 'm': 'Marathon',
+    };
+
+    // Parse a race time string like "28:40" or "1:52:30" to minutes.
+    function coachParseTimeToMinutes_(s) {
+      if (!s) return null;
+      const parts = String(s).trim().split(':').map(Number);
+      if (parts.some(p => Number.isNaN(p))) return null;
+      let mins = 0;
+      if (parts.length === 3) mins = parts[0]*60 + parts[1] + parts[2]/60;
+      else if (parts.length === 2) mins = parts[0] + parts[1]/60;
+      else if (parts.length === 1) mins = parts[0];
+      else return null;
+      return mins > 0 ? mins : null;
+    }
+
+    // Format a pace in minutes-per-mile as "M:SS/mi".
+    function coachFormatPace_(minutesPerMile) {
+      if (!minutesPerMile || !isFinite(minutesPerMile)) return '—';
+      const totalSec = Math.round(minutesPerMile * 60);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m}:${String(s).padStart(2, '0')}/mi`;
+    }
+
+    // Format a pace range "M:SS – M:SS/mi" from two pace numbers.
+    function coachFormatPaceRange_(lo, hi) {
+      if (!lo || !hi || !isFinite(lo) || !isFinite(hi)) return '—';
+      const fmt = (p) => {
+        const t = Math.round(p * 60);
+        const m = Math.floor(t / 60);
+        const s = t % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+      };
+      return `${fmt(Math.max(lo, hi))} – ${fmt(Math.min(lo, hi))}/mi`;
+    }
+
+    // VDOT from a race performance.
+    function vdotFromRace_(raceKey, timeStr) {
+      const meters = COACH_RACE_METERS[raceKey];
+      const minutes = coachParseTimeToMinutes_(timeStr);
+      if (!meters || !minutes) return null;
+      const v = meters / minutes;                       // velocity in m/min
+      const vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v;
+      const t = minutes;
+      const pctVo2max = 0.8
+                     + 0.1894393 * Math.exp(-0.012778 * t)
+                     + 0.2989558 * Math.exp(-0.1932605 * t);
+      const vdot = vo2 / pctVo2max;
+      return vdot > 0 ? vdot : null;
+    }
+
+    // Velocity (m/min) that would produce a given VO2 demand.
+    function coachVelocityForVo2_(vo2) {
+      // Solve: 0.000104*v^2 + 0.182258*v - 4.60 - vo2 = 0
+      const a = 0.000104, b = 0.182258, c = -4.60 - vo2;
+      const disc = b*b - 4*a*c;
+      if (disc < 0) return null;
+      const v = (-b + Math.sqrt(disc)) / (2 * a);
+      return v > 0 ? v : null;
+    }
+
+    // Convert VDOT → a set of training paces in min/mile.
+    // Percentages follow Daniels' zone recommendations.
+    function pacesFromVdot_(vdot) {
+      if (!vdot || vdot <= 0) return null;
+      const paceFor = (pctVo2max) => {
+        const vo2 = pctVo2max * vdot;
+        const v = coachVelocityForVo2_(vo2);
+        if (!v) return null;
+        return 1609.34 / v; // min/mile
+      };
+      return {
+        vdot:       Math.round(vdot * 10) / 10,
+        easyLo:     paceFor(0.79),   // range: 65–79%
+        easyHi:     paceFor(0.65),
+        marathon:   paceFor(0.84),
+        threshold:  paceFor(0.88),
+        interval:   paceFor(0.98),
+        repetition: paceFor(1.10),
+      };
+    }
+
+    // ---- Coaching narratives -------------------------------------
+    // Per-week paragraphs. Phase inferred from position in the plan.
+    // Keep each narrative to 2-3 sentences — this is a nudge, not a lecture.
+    function coachPhaseForWeek_(weekIdx, totalWeeks) {
+      const pct = (weekIdx + 1) / totalWeeks;
+      if (pct >= 0.90) return 'taper';
+      if (pct >= 0.65) return 'peak';
+      if (pct >= 0.30) return 'build';
+      return 'base';
+    }
+
+    const COACH_NARRATIVES = {
+      base: [
+        "Kicking off with easy aerobic work. Every run this week should feel conversational — if you can't talk, slow down.",
+        "Base building continues. The goal is time on feet, not speed. Resist the urge to push the pace.",
+        "Still in base. Consistency beats intensity right now — showing up 3-4 times this week matters more than any single workout.",
+        "Last easy-only week before we add sharper work. Nail your easy pace so you have room to add intensity without burning out.",
+      ],
+      build: [
+        "First workout week. The tempo run teaches your body to clear lactate faster — you'll feel it in your legs, but recover quickly.",
+        "Adding a bit more volume + a second quality session. Keep easy runs truly easy so you can crush the hard ones.",
+        "Intervals enter the picture. These are short and fast — the goal is running form and neuromuscular sharpness, not death.",
+        "Volume peak week for this block. If anything hurts, back off — better to lose a session than a month.",
+        "Cutback week. Volume drops 20-30% so your body can absorb the last three weeks of work. Don't skip the easy days.",
+      ],
+      peak: [
+        "Race-specific pace enters the picture. Workouts start to mimic race demands — this is where fitness gets sharpened.",
+        "Long run pace pushes toward marathon effort in the middle miles. Practice fueling and hydration like it's race day.",
+        "Peak intensity week. Sessions are hard but shorter — the point is quality, not accumulation. Sleep is your best supplement.",
+        "Race simulation. Test your race-day breakfast, kit, and pacing strategy on this week's long run.",
+      ],
+      taper: [
+        "Taper begins. Volume drops 25-35%, intensity stays. Trust the process — the fitness is already banked.",
+        "Race week. Short, easy runs plus a few pickups to keep the legs alert. Don't try anything new. Eat, sleep, hydrate.",
+      ],
+    };
+
+    // Pick a narrative for this week from the phase's rotation.
+    function coachNarrativeForWeek_(weekIdx, totalWeeks) {
+      const phase = coachPhaseForWeek_(weekIdx, totalWeeks);
+      const pool = COACH_NARRATIVES[phase] || [];
+      if (!pool.length) return '';
+      // Rotate through the pool based on position within the phase.
+      const phaseStart = phase === 'base' ? 0
+                      : phase === 'build' ? Math.floor(totalWeeks * 0.30)
+                      : phase === 'peak' ? Math.floor(totalWeeks * 0.65)
+                      : Math.floor(totalWeeks * 0.90);
+      const withinPhase = weekIdx - phaseStart;
+      return pool[Math.min(withinPhase, pool.length - 1)];
+    }
+
+    // Human label for a phase (used in weekly card header).
+    function coachPhaseLabel_(phase) {
+      return { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' }[phase] || phase;
+    }
+
+    // Estimate a session's duration in minutes given the paces.
+    // Used for the soft session-length warning.
+    function coachEstimateDuration_(sess, paces) {
+      if (!sess) return 0;
+      const p = paces || { easyHi: 10, easyLo: 8, marathon: 8, threshold: 7, interval: 6, repetition: 5.5 };
+      const kind = String(sess.kind || 'easy').toLowerCase();
+      const dist = Number(sess.dist || 0);
+      let paceMin = p.easyHi || 10;
+      if (kind.includes('long'))     paceMin = (p.easyHi + p.easyLo) / 2;
+      else if (kind.includes('tempo') || kind.includes('threshold')) paceMin = p.threshold;
+      else if (kind.includes('interval') || kind.includes('vo2'))    paceMin = (p.interval + p.easyHi) / 2; // includes recovery
+      else if (kind.includes('marathon') || kind.includes('mp'))     paceMin = p.marathon;
+      else if (kind.includes('rep'))                                  paceMin = (p.repetition + p.easyHi) / 2;
+      // Add ~10 min for warmup + cooldown on quality sessions
+      const wuCd = /easy|long|recovery/.test(kind) ? 0 : 10;
+      return Math.round(dist * paceMin + wuCd);
+    }
+
+    // ---- Plan generation -----------------------------------------
+    // Given the form state, produce { weeks: [ { weekIdx, phase, narrative,
+    // sessions: [ { kind, name, dist, description } ] } ], paces }.
+    function generateCoachPlan_(state) {
+      const paces = state.raceDist && state.raceTime
+                   ? pacesFromVdot_(vdotFromRace_(state.raceDist, state.raceTime))
+                   : null;
+      const totalWeeks = Math.max(4, Math.min(24, state.weeks));
+      const daysPerWeek = Math.max(2, Math.min(6, state.days));
+      const targetKey = state.dist;
+      const level = state.level;
+
+      // Peak long-run distance by target race distance + level.
+      const peakLongRun = {
+        '1mi':  { beginner: 4,  intermediate: 6,  advanced: 8  },
+        '2mi':  { beginner: 5,  intermediate: 7,  advanced: 9  },
+        '5k':   { beginner: 6,  intermediate: 8,  advanced: 10 },
+        '4mi':  { beginner: 7,  intermediate: 9,  advanced: 11 },
+        '5mi':  { beginner: 8,  intermediate: 10, advanced: 12 },
+        '10k':  { beginner: 8,  intermediate: 11, advanced: 13 },
+        '15k':  { beginner: 10, intermediate: 12, advanced: 15 },
+        '10mi': { beginner: 11, intermediate: 13, advanced: 16 },
+        'hm':   { beginner: 12, intermediate: 15, advanced: 18 },
+        'm':    { beginner: 18, intermediate: 20, advanced: 22 },
+      };
+      const peakLR = (peakLongRun[targetKey] && peakLongRun[targetKey][level]) || 10;
+      const currentMi = Math.max(0, Number(state.currentMiles) || 0);
+      const startLR = Math.max(2, Math.min(peakLR * 0.4, currentMi * 0.35));
+
+      const weeks = [];
+      for (let w = 0; w < totalWeeks; w++) {
+        const phase = coachPhaseForWeek_(w, totalWeeks);
+        const narrative = coachNarrativeForWeek_(w, totalWeeks);
+        // Long run scales linearly from startLR to peakLR over base+build,
+        // holds through peak, drops sharply in taper.
+        const progressPct = Math.min(1, w / Math.max(1, totalWeeks * 0.85));
+        let longMi = Math.round((startLR + (peakLR - startLR) * progressPct) * 10) / 10;
+        if (phase === 'taper') {
+          const taperWeek = w - Math.floor(totalWeeks * 0.90);
+          longMi = Math.round(peakLR * (taperWeek === 0 ? 0.65 : 0.35) * 10) / 10;
+        }
+        // Cutback week — every 4th build week drops 25%.
+        if (phase === 'build' && (w % 4 === 3)) longMi = Math.round(longMi * 0.75 * 10) / 10;
+
+        const sessions = coachSessionsForWeek_(phase, daysPerWeek, longMi, targetKey, currentMi, w, totalWeeks);
+        weeks.push({ weekIdx: w, phase, narrative, sessions, longMi });
+      }
+      return { paces, weeks, totalWeeks, daysPerWeek };
+    }
+
+    // Build the actual session list for a week.
+    function coachSessionsForWeek_(phase, daysPerWeek, longMi, targetKey, currentMi, weekIdx, totalWeeks) {
+      const sessions = [];
+      const easyMi = Math.max(2, Math.round(currentMi * 0.15 * 10) / 10);
+      // Common: 1 long run per week (all phases).
+      const longLabel = phase === 'peak' ? 'Long Run (with race-pace miles)'
+                      : phase === 'taper' ? 'Long Run (reduced)'
+                      : 'Long Run';
+      const longDesc = phase === 'peak'
+        ? `${longMi} mi total: warm up ${Math.max(2, Math.round(longMi * 0.3))} mi easy, then middle miles at marathon pace, cool down easy.`
+        : phase === 'taper'
+        ? `${longMi} mi at easy pace. Keep it comfortable — legs should feel fresh.`
+        : `${longMi} mi at easy pace. Conversational effort throughout.`;
+      sessions.push({ kind: 'long', name: longLabel, dist: longMi, description: longDesc });
+
+      if (daysPerWeek >= 3 && (phase === 'build' || phase === 'peak')) {
+        // Add a quality workout mid-week.
+        const workoutKind = phase === 'peak' ? 'threshold' : (weekIdx % 2 === 0 ? 'tempo' : 'interval');
+        if (workoutKind === 'tempo') {
+          sessions.push({
+            kind: 'tempo',
+            name: 'Tempo Run',
+            dist: Math.max(3, Math.round(easyMi * 1.5 * 10) / 10),
+            description: `Warm up 1-2 mi easy, then ${Math.max(2, Math.round(easyMi))} mi at threshold pace, cool down 1 mi easy.`,
+          });
+        } else if (workoutKind === 'interval') {
+          sessions.push({
+            kind: 'interval',
+            name: 'Intervals',
+            dist: Math.max(4, Math.round(easyMi * 1.6 * 10) / 10),
+            description: `Warm up 1-2 mi easy, then 5-6 × 800m at interval pace with 400m easy jog recovery, cool down 1 mi easy.`,
+          });
+        } else {
+          sessions.push({
+            kind: 'threshold',
+            name: 'Cruise Intervals',
+            dist: Math.max(4, Math.round(easyMi * 1.4 * 10) / 10),
+            description: `Warm up 1-2 mi easy, then 3-4 × 1 mi at threshold pace with 90s recovery, cool down 1 mi easy.`,
+          });
+        }
+      }
+
+      // Fill remaining slots with easy runs.
+      const remaining = Math.max(0, daysPerWeek - sessions.length);
+      for (let i = 0; i < remaining; i++) {
+        sessions.push({
+          kind: 'easy',
+          name: 'Easy Run',
+          dist: easyMi,
+          description: `${easyMi} mi at easy pace. Zone 2, conversational effort.`,
+        });
+      }
+      return sessions;
+    }
+
+    // ---- The Coach's Edition form + render -----------------------
+    let coachDistSel  = null;
+    let coachLevelSel = null;
+
+    function renderCoachPlan(app) {
+      app.appendChild(el('header', { class: 'top' }, [el('h1', {}, "Coach's Edition")]));
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render('programs'),
+      }, '← Back to Programs'));
+
+      const root = el('div');
+      app.appendChild(root);
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem('coachPlanState_v1') || '{}'); } catch(e) {}
+      coachDistSel  = saved.dist  || null;
+      coachLevelSel = saved.level || null;
+      window.coachSelectedDows = Array.isArray(saved.dows) ? saved.dows.slice() : [];
+
+      const todayISO_ = new Date().toISOString().slice(0, 10);
+      const defaultRaceDate = saved.raceDate || '';
+
+      root.innerHTML = `
+        <div class="card" style="background: color-mix(in srgb, var(--primary) 6%, var(--surface));">
+          <div style="font-size: 12px; color: var(--primary); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700;">
+            Powered by VDOT
+          </div>
+          <div style="margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--text);">
+            Coach's Edition uses Jack Daniels' VDOT methodology to compute your training paces from a recent race,
+            then builds a periodized plan that peaks and tapers around your race date. Add a coaching note for
+            each week so you know <em>why</em> the plan looks the way it does.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>TARGET RACE</h2>
+          <div class="plan-dist-grid" style="margin-bottom:20px">
+            ${[['5k','🎯','5K','3.1 mi'],['10k','⭐','10K','6.2 mi'],['15k','💪','15K','9.3 mi'],['10mi','💪','10 Miles','Road race'],['hm','🏆','Half Marathon','13.1 mi'],['m','👑','Marathon','26.2 mi']].map(([k,ic,lb,sb])=>`
+              <button class="plan-dist-btn${coachDistSel===k?' sel':''}" onclick="coachDistSel='${k}';document.querySelectorAll('#coachForm .plan-dist-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel');coachRefreshWeeks()">
+                <div class="plan-dist-icon">${ic}</div>
+                <span class="plan-dist-name">${lb}</span>
+                <span class="plan-dist-sub">${sb}</span>
+              </button>`).join('')}
+          </div>
+        </div>
+
+        <div class="card" id="coachForm">
+          <h2>RACE DAY</h2>
+          <div class="field">
+            <label>Race date (optional — leave blank to set duration manually)</label>
+            <input id="coachRaceDate" type="date" value="${defaultRaceDate}" min="${todayISO_}" onchange="coachRefreshWeeks()">
+          </div>
+          <div id="coachWeeksHint" class="muted" style="font-size:11px;margin-top:-4px;margin-bottom:14px"></div>
+
+          <div class="plan-slider-row" id="coachWeeksRow">
+            <div class="plan-slider-hdr">
+              <label>Or set program duration</label>
+              <div class="plan-slider-val" id="coachWeeksVal">12 <span>wks</span></div>
+            </div>
+            <input type="range" class="plan-range" id="coachWeeks" min="6" max="20" value="${saved.weeks||12}" oninput="document.getElementById('coachWeeksVal').innerHTML=this.value+' <span>wks</span>'">
+            <div class="plan-slider-marks"><span>6</span><span>10</span><span>14</span><span>18</span></div>
+          </div>
+
+          <h2 style="margin-top: 24px;">WHERE YOU ARE</h2>
+          <div class="plan-level-grid" style="margin-bottom:20px">
+            ${[['beginner','🌱','Beginner','New to running or returning after a break'],['intermediate','🔥','Intermediate','Running regularly, some race experience'],['advanced','⚡','Advanced','Consistent training, chasing a PR']].map(([k,ic,lb,ds])=>`
+              <button class="plan-level-btn${coachLevelSel===k?' sel':''}" onclick="coachLevelSel='${k}';document.querySelectorAll('#coachForm .plan-level-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel')">
+                <div class="plan-level-icon">${ic}</div>
+                <span class="plan-level-name">${lb}</span>
+                <span class="plan-level-desc">${ds}</span>
+              </button>`).join('')}
+          </div>
+          <div class="field">
+            <label>Current weekly mileage</label>
+            <input id="coachMiles" type="number" inputmode="decimal" placeholder="e.g. 15" value="${saved.currentMiles||''}" style="text-align:left">
+          </div>
+
+          <div class="plan-optional active" style="margin-top: 8px;">
+            <span style="font-size:18px">⏱️</span>
+            <div class="plan-opt-text"><strong>Recent race time — powers VDOT</strong><small>Not required, but pace zones are calibrated from this</small></div>
+          </div>
+          <div class="plan-race-fields vis">
+            <div class="plan-race-col">
+              <label>Race distance</label>
+              <select id="coachRaceDist">
+                <option value="">Select…</option>
+                <option value="1mi" ${saved.raceDist==='1mi'?'selected':''}>1 Mile</option>
+                <option value="5k"  ${saved.raceDist==='5k'?'selected':''}>5K</option>
+                <option value="10k" ${saved.raceDist==='10k'?'selected':''}>10K</option>
+                <option value="hm"  ${saved.raceDist==='hm'?'selected':''}>Half Marathon</option>
+                <option value="m"   ${saved.raceDist==='m'?'selected':''}>Marathon</option>
+              </select>
+            </div>
+            <div class="plan-race-col">
+              <label>Finish time (h:mm:ss)</label>
+              <input id="coachRaceTime" type="text" inputmode="text" placeholder="e.g. 24:35" value="${saved.raceTime||''}">
+            </div>
+          </div>
+
+          <h2 style="margin-top: 24px;">TRAINING WINDOW</h2>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Days per week</label>
+              <div class="plan-slider-val" id="coachDaysVal">4 <span>days</span></div>
+            </div>
+            <input type="range" class="plan-range" id="coachDays" min="3" max="6" value="${saved.days||4}" oninput="document.getElementById('coachDaysVal').innerHTML=this.value+' <span>days</span>';window.updateCoachDowNote()">
+            <div class="plan-slider-marks"><span>3</span><span>4</span><span>5</span><span>6</span></div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Which days can you run?</label>
+              <div class="muted" id="coachDowsNote" style="font-size:11px"></div>
+            </div>
+            <div class="plan-dow-row">
+              ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i) => `
+                <button type="button" class="plan-dow-btn${(saved.dows||[]).includes(i)?' sel':''}" data-coachdow="${i}" onclick="coachToggleDow(${i})">${d}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Session length target</label>
+              <div class="plan-slider-val" id="coachSessLenVal">${saved.sessLen||60} <span>min</span></div>
+            </div>
+            <input type="range" class="plan-range" id="coachSessLen" min="30" max="120" step="15" value="${saved.sessLen||60}" oninput="document.getElementById('coachSessLenVal').innerHTML=this.value+' <span>min</span>'">
+            <div class="plan-slider-marks"><span>30</span><span>60</span><span>90</span><span>120</span></div>
+            <div class="muted" style="font-size:11px;margin-top:6px">Soft target. Long runs may exceed it — we'll flag sessions that go over.</div>
+          </div>
+
+          <h2 style="margin-top: 24px;">HEALTH</h2>
+          <div class="field">
+            <label>Injury or limitation notes (optional)</label>
+            <textarea id="coachInjury" rows="2" placeholder="e.g. 'right IT band flared last month — keep pace conservative on long runs'" style="width:100%;padding:12px;font-size:14px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;resize:vertical;font-family:inherit">${saved.injury||''}</textarea>
+          </div>
+
+          <div class="plan-err" id="coachErr"></div>
+          <button onclick="coachPlanGenerate()">▶  Generate My Coach's Plan</button>
+        </div>
+        <div id="coachOutput"></div>
+      `;
+
+      // Slider display init
+      const dv = saved.days || 4, wv = saved.weeks || 12, sl = saved.sessLen || 60;
+      document.getElementById('coachDaysVal').innerHTML    = `${dv} <span>days</span>`;
+      document.getElementById('coachWeeksVal').innerHTML   = `${wv} <span>wks</span>`;
+      document.getElementById('coachSessLenVal').innerHTML = `${sl} <span>min</span>`;
+
+      // Race-date → weeks derivation
+      window.coachRefreshWeeks = function() {
+        const dateEl  = document.getElementById('coachRaceDate');
+        const weeksEl = document.getElementById('coachWeeks');
+        const hintEl  = document.getElementById('coachWeeksHint');
+        const rowEl   = document.getElementById('coachWeeksRow');
+        if (!dateEl || !weeksEl || !hintEl) return;
+        const raceStr = dateEl.value;
+        if (!raceStr) {
+          hintEl.textContent = '';
+          hintEl.style.color = 'var(--muted)';
+          if (rowEl) rowEl.style.opacity = '1';
+          return;
+        }
+        const race = new Date(raceStr + 'T12:00:00');
+        const today = new Date(); today.setHours(12,0,0,0);
+        const diffDays = Math.floor((race - today) / (1000*60*60*24));
+        const weeks = Math.max(1, Math.round(diffDays / 7));
+        if (weeks < 4) {
+          hintEl.textContent = `⚠️ Only ${weeks} weeks until race day — plan will be a short sharpener rather than a full build.`;
+          hintEl.style.color = 'var(--danger, #D93A2B)';
+        } else if (weeks > 20) {
+          hintEl.textContent = `${weeks} weeks out — we'll spread base building across the extra time.`;
+          hintEl.style.color = 'var(--muted)';
+        } else {
+          hintEl.textContent = `${weeks} weeks until race day. Program length locked to match.`;
+          hintEl.style.color = 'var(--success, #8CC63F)';
+        }
+        weeksEl.value = String(Math.max(4, Math.min(24, weeks)));
+        document.getElementById('coachWeeksVal').innerHTML = `${weeksEl.value} <span>wks</span>`;
+        if (rowEl) rowEl.style.opacity = '0.5';
+      };
+      window.coachRefreshWeeks();
+
+      // Day-count live feedback (mirrors Run Planner v33.2 Q1)
+      const coachDowDefaults = {
+        3: 'Tue / Thu / Sat', 4: 'Tue / Thu / Fri / Sat',
+        5: 'Mon / Wed / Thu / Fri / Sat', 6: 'Mon / Tue / Thu / Fri / Sat / Sun',
+      };
+      window.updateCoachDowNote = function() {
+        const note = document.getElementById('coachDowsNote');
+        const daysEl = document.getElementById('coachDays');
+        if (!note || !daysEl) return;
+        const need = Number(daysEl.value) || 4;
+        const have = (window.coachSelectedDows || []).length;
+        if (have === 0) {
+          note.textContent = `Optional — leave blank and we'll assign ${coachDowDefaults[need] || 'sensible defaults'}.`;
+          note.style.color = 'var(--muted)';
+        } else if (have === need) {
+          note.textContent = `✓ ${have} of ${need} days selected.`;
+          note.style.color = 'var(--success, #8CC63F)';
+        } else {
+          note.textContent = `${have} of ${need} days selected. Pick ${need-have>0 ? (need-have)+' more' : Math.abs(need-have)+' fewer'} — or clear for auto-assign.`;
+          note.style.color = 'var(--danger, #D93A2B)';
+        }
+      };
+      window.updateCoachDowNote();
+    }
+
+    window.coachToggleDow = function(i) {
+      if (!Array.isArray(window.coachSelectedDows)) window.coachSelectedDows = [];
+      const arr = window.coachSelectedDows;
+      const idx = arr.indexOf(i);
+      if (idx > -1) arr.splice(idx, 1); else arr.push(i);
+      const btn = document.querySelector(`.plan-dow-btn[data-coachdow="${i}"]`);
+      if (btn) btn.classList.toggle('sel');
+      if (typeof window.updateCoachDowNote === 'function') window.updateCoachDowNote();
+    };
+
+    window.coachPlanGenerate = function() {
+      const errEl = document.getElementById('coachErr');
+      errEl.classList.remove('vis');
+      if (!coachDistSel)  { errEl.textContent='Pick a target race distance.'; errEl.classList.add('vis'); return; }
+      if (!coachLevelSel) { errEl.textContent='Pick your fitness level.'; errEl.classList.add('vis'); return; }
+      const currentMiles = parseFloat(document.getElementById('coachMiles').value);
+      if (isNaN(currentMiles) || currentMiles < 0) { errEl.textContent='Enter your current weekly mileage.'; errEl.classList.add('vis'); return; }
+      const days = parseInt(document.getElementById('coachDays').value);
+      const weeks = parseInt(document.getElementById('coachWeeks').value);
+      const chosenDows = Array.isArray(window.coachSelectedDows) ? window.coachSelectedDows : [];
+      if (chosenDows.length > 0 && chosenDows.length !== days) {
+        errEl.textContent = `You picked ${chosenDows.length} days but selected ${days} days per week. Adjust to match, or clear to auto-assign.`;
+        errEl.classList.add('vis');
+        return;
+      }
+      const raceDate = document.getElementById('coachRaceDate').value || null;
+      const raceDist = document.getElementById('coachRaceDist').value;
+      const raceTime = document.getElementById('coachRaceTime').value.trim();
+      const sessLen  = Number(document.getElementById('coachSessLen').value) || 60;
+      const injury   = (document.getElementById('coachInjury').value || '').trim();
+
+      const state = {
+        dist: coachDistSel, level: coachLevelSel, currentMiles,
+        days, weeks, dows: chosenDows,
+        raceDate, raceDist, raceTime, sessLen, injury,
+      };
+      try { localStorage.setItem('coachPlanState_v1', JSON.stringify(state)); } catch(e) {}
+
+      const plan = generateCoachPlan_(state);
+      coachRenderOutput_(state, plan);
+    };
+
+    function coachRenderOutput_(state, plan) {
+      const out = document.getElementById('coachOutput');
+      if (!out) return;
+      out.innerHTML = '';
+
+      // Header card — race name, date, weeks to go, VDOT
+      const raceLabel = COACH_RACE_LABELS[state.dist] || state.dist;
+      const headerBits = [];
+      if (state.raceDate) {
+        const dt = new Date(state.raceDate + 'T12:00:00');
+        headerBits.push(dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }));
+      }
+      headerBits.push(`${plan.totalWeeks} weeks · ${plan.daysPerWeek} days/wk`);
+      if (plan.paces && plan.paces.vdot) headerBits.push(`VDOT ${plan.paces.vdot}`);
+
+      const header = el('div', { class: 'card', style: 'margin-top: 20px; background: linear-gradient(135deg, var(--primary) 0%, color-mix(in srgb, var(--primary) 70%, var(--accent)) 100%); color: white;' }, [
+        el('div', { style: 'font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.85;' }, "Coach's Plan"),
+        el('div', { style: 'font-size: 22px; font-weight: 800; margin-top: 4px; letter-spacing: -0.02em;' }, `${raceLabel}`),
+        el('div', { style: 'font-size: 13px; margin-top: 6px; opacity: 0.9;' }, headerBits.join(' · ')),
+      ]);
+      out.appendChild(header);
+
+      // Injury note callout
+      if (state.injury) {
+        out.appendChild(el('div', { class: 'card', style: 'background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-left: 3px solid var(--accent);' }, [
+          el('div', { style: 'font-size: 11px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;' }, 'Coaching Note'),
+          el('div', { style: 'margin-top: 4px; font-size: 14px; line-height: 1.5;' }, state.injury),
+        ]));
+      }
+
+      // Pace zones card
+      if (plan.paces) {
+        const p = plan.paces;
+        const zoneRow = (color, name, sub, val) => el('div', { style: 'display: grid; grid-template-columns: 8px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border);' }, [
+          el('div', { style: `background: ${color}; width: 4px; height: 24px; border-radius: 2px;` }),
+          el('div', {}, [
+            el('div', { style: 'font-weight: 600; font-size: 14px;' }, name),
+            el('div', { class: 'muted', style: 'font-size: 12px;' }, sub),
+          ]),
+          el('div', { style: 'font-weight: 700; font-size: 14px; white-space: nowrap;' }, val),
+        ]);
+        out.appendChild(el('div', { class: 'card' }, [
+          el('h2', {}, 'PACE ZONES'),
+          el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -6px; margin-bottom: 4px;' }, `Derived from your ${COACH_RACE_LABELS[state.raceDist] || 'race'} time.`),
+          zoneRow('#32d74b', 'Easy',       'Conversational; base + recovery',           coachFormatPaceRange_(p.easyLo, p.easyHi)),
+          zoneRow('#5ac8fa', 'Marathon',   'Sustained aerobic; race pace for 26.2',    coachFormatPace_(p.marathon)),
+          zoneRow('#ff9f0a', 'Threshold',  'Comfortably hard; ~1 hour effort',          coachFormatPace_(p.threshold)),
+          zoneRow('#ff453a', 'Interval',   'Hard; VO2max intervals (800m-1200m)',      coachFormatPace_(p.interval)),
+          zoneRow('#bf5af2', 'Repetition', 'All-out; 200-400m speed reps',              coachFormatPace_(p.repetition)),
+        ]));
+      } else {
+        out.appendChild(el('div', { class: 'card', style: 'background: color-mix(in srgb, var(--muted) 10%, var(--surface));' }, [
+          el('div', { class: 'muted', style: 'font-size: 13px;' },
+            '💡 Add a recent race time above to unlock VDOT-derived pace zones. Without it, the plan uses generic effort labels.'),
+        ]));
+      }
+
+      // Weekly cards
+      plan.weeks.forEach((wk, i) => {
+        const wkCard = el('div', { class: 'card' }, [
+          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline;' }, [
+            el('div', { style: 'font-size: 18px; font-weight: 800; letter-spacing: -0.02em;' }, `Week ${wk.weekIdx + 1}`),
+            el('span', { class: 'pill', style: 'font-size: 11px; padding: 2px 10px; background: var(--surface-2); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;' }, coachPhaseLabel_(wk.phase)),
+          ]),
+          wk.narrative ? el('div', {
+            style: 'margin-top: 8px; font-size: 13px; line-height: 1.5; color: var(--text); font-style: italic; padding: 8px 12px; background: var(--surface-2); border-radius: 8px;',
+          }, wk.narrative) : null,
+        ]);
+        wk.sessions.forEach(sess => {
+          const durMin = coachEstimateDuration_(sess, plan.paces);
+          const overTarget = durMin > state.sessLen;
+          wkCard.appendChild(el('div', { style: 'padding: 10px 0; border-top: 1px solid var(--border); margin-top: 10px;' }, [
+            el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' }, [
+              el('div', { style: 'font-weight: 700; font-size: 14px;' }, [
+                sess.name,
+                overTarget ? el('span', { title: `${durMin} min > ${state.sessLen} min target`, style: 'margin-left: 6px; color: var(--danger, #D93A2B); font-size: 12px;' }, `⚠️ ~${durMin} min`) : null,
+              ]),
+              el('span', { class: 'muted', style: 'font-size: 12px; white-space: nowrap;' }, `${sess.dist} mi${!overTarget ? ` · ~${durMin} min` : ''}`),
+            ]),
+            el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px; line-height: 1.5;' }, sess.description),
+          ]));
+        });
+        out.appendChild(wkCard);
+      });
+
+      // Save & Activate CTA
+      const cta = el('div', { style: 'margin-top: 20px; display: flex; flex-direction: column; gap: 8px;' }, [
+        el('button', {
+          style: 'width: 100%;',
+          onclick: () => coachSavePlan_(state, plan, true),
+        }, 'Save & Activate Plan'),
+        el('button', {
+          style: 'width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
+          onclick: () => coachSavePlan_(state, plan, false),
+        }, 'Save to Library (don\'t activate)'),
+      ]);
+      out.appendChild(cta);
+    }
+
+    // Convert Coach's plan to training_plans.structure JSONB and save.
+    async function coachSavePlan_(state, plan, activate) {
+      const startISO = state.raceDate
+        ? (() => { const d = new Date(state.raceDate + 'T12:00:00'); d.setDate(d.getDate() - plan.totalWeeks * 7); return d.toISOString().slice(0,10); })()
+        : new Date().toISOString().slice(0, 10);
+      const structure = convertCoachPlanToTrainingPlan_(state, plan, startISO);
+      const raceLabel = COACH_RACE_LABELS[state.dist] || state.dist;
+      const name = state.raceDate
+        ? `${raceLabel} — ${new Date(state.raceDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        : `${raceLabel} — ${plan.totalWeeks} wk plan`;
+      const notes = state.injury ? `Coaching note: ${state.injury}` : null;
+      try {
+        const res = await sbSaveTrainingPlan({ name, structure, notes, activate, planType: 'run' });
+        if (activate && res.displacedNames && res.displacedNames.length) {
+          toast(`Activated. Deactivated: ${res.displacedNames.join(', ')}`);
+        } else {
+          toast(activate ? `Activated "${name}"` : `Saved "${name}" to library`);
+        }
+        setTimeout(() => render('programs'), 800);
+      } catch (e) {
+        toast('Could not save: ' + (e.message || e), true);
+      }
+    }
+
+    function convertCoachPlanToTrainingPlan_(state, plan, startDateISO) {
+      const raw = new Date(startDateISO + 'T12:00:00');
+      const jsDow = raw.getDay();
+      const monOffset = (jsDow + 6) % 7;
+      const anchor = new Date(raw);
+      anchor.setDate(raw.getDate() - monOffset);
+
+      const defaults = {
+        3: [1, 3, 5], 4: [1, 3, 4, 5],
+        5: [0, 2, 3, 4, 5], 6: [0, 1, 3, 4, 5, 6],
+      };
+      const dows = (Array.isArray(state.dows) && state.dows.length)
+        ? [...state.dows].sort((a,b)=>a-b)
+        : (defaults[state.days] || [1, 3, 5]);
+      const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+      const days = [];
+      plan.weeks.forEach((wk, wi) => {
+        const slotCount = Math.min(wk.sessions.length, dows.length);
+        for (let i = 0; i < slotCount; i++) {
+          const sess = wk.sessions[i];
+          const dowIdx = dows[i];
+          const d = new Date(anchor);
+          d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
+          days.push({
+            date: d.toISOString().slice(0, 10),
+            week: wi + 1,
+            dow: dowNames[dowIdx],
+            phase: wk.phase,
+            narrative: wk.narrative,
+            sessions: [{
+              type: 'run',
+              name: sess.name,
+              workout_kind: sess.kind,
+              target_miles: sess.dist,
+              main_set: sess.description,
+              est_duration_min: coachEstimateDuration_(sess, plan.paces),
+            }],
+          });
+        }
+      });
+      const startISO = anchor.toISOString().slice(0, 10);
+      const endISO = days.length ? days[days.length - 1].date : startISO;
+      return {
+        config: {
+          start_date: startISO,
+          end_date:   endISO,
+          total_weeks: plan.totalWeeks,
+          generator: 'coach-edition',
+          race_date: state.raceDate || null,
+          race_key:  state.dist,
+          level:     state.level,
+          paces:     plan.paces || null,
+          injury:    state.injury || null,
+        },
+        days,
+      };
+    }
+
+    // ========== end v34.1 Coach's Edition ==========
 
     // -------- Nav --------
     document.querySelectorAll('nav.bottom button').forEach(b => {
