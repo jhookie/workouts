@@ -1849,7 +1849,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.0.1';
+    const APP_VERSION = 'v34.0.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -6089,6 +6089,24 @@
     // -------- Lift Session detail screen --------
     let _liftSessionRef = null; // { date, day } set by Calendar tap
 
+    // v34.1 fix (5-set logging bug): a lift exercise stores its per-set
+    // rep counts in TWO places for backward compat — the modern `sets[]`
+    // array (unlimited sets) and legacy `r1..r4` fields (capped at 4).
+    // When a user logs 5+ sets (5/3/1 back-off, myoreps, drop sets, etc.)
+    // the 5th and beyond only exist in `sets[]`. Prefer that when
+    // present, fall back to r1..r4 for older records logged before the
+    // sets[] shape existed. Returns an array of numeric reps.
+    function extractExerciseReps_(ex) {
+      if (ex && Array.isArray(ex.sets) && ex.sets.length) {
+        return ex.sets
+          .map(s => (s == null || s.reps === '' || s.reps == null) ? null : Number(s.reps))
+          .filter(v => v !== null && !Number.isNaN(v));
+      }
+      return [ex.r1, ex.r2, ex.r3, ex.r4]
+        .map(v => (v === '' || v == null) ? null : Number(v))
+        .filter(v => v !== null && !Number.isNaN(v));
+    }
+
     // v33.4 (post-v33.3 test): a user can legitimately log the same
     // session name twice on one day (morning + evening, or duplicate
     // taps). The old .maybeSingle() query threw "multiple (or no) rows
@@ -6200,12 +6218,12 @@
       }
 
       // Summary stats
+      // v34.1: extractExerciseReps_ prefers sets[] over legacy r1..r4 so
+      // 5+ set exercises count correctly toward the session totals.
       let totalReps = 0;
       let totalSets = 0;
       exercises.forEach(ex => {
-        const setReps = [ex.r1, ex.r2, ex.r3, ex.r4]
-          .map(v => Number(v) || 0)
-          .filter(v => v > 0);
+        const setReps = extractExerciseReps_(ex).filter(v => v > 0);
         totalSets += setReps.length;
         totalReps += setReps.reduce((s, v) => s + v, 0);
       });
@@ -6224,9 +6242,8 @@
       // Per-exercise breakdown — each card opens the progression view.
       const list = el('div');
       exercises.forEach(ex => {
-        const setReps = [ex.r1, ex.r2, ex.r3, ex.r4]
-          .map(v => (v === '' || v == null) ? null : Number(v))
-          .filter(v => v !== null);
+        // v34.1: sets[] holds all sets; r1..r4 caps at 4. Prefer the array.
+        const setReps = extractExerciseReps_(ex);
         const setSum = setReps.reduce((s, v) => s + (v || 0), 0);
         list.appendChild(el('div', {
           class: 'card session-ex progression-tap',
@@ -6285,9 +6302,9 @@
         const arr = Array.isArray(s.exercises) ? s.exercises : [];
         const match = arr.find(ex => normalizeExName_(ex.name) === wanted);
         if (!match) return;
-        const setReps = [match.r1, match.r2, match.r3, match.r4]
-          .map(v => (v === '' || v == null) ? null : Number(v))
-          .filter(v => v !== null);
+        // v34.1: extract from sets[] when present so 5+ set exercises
+        // (5/3/1 back-off, myoreps, drop sets) count their real total.
+        const setReps = extractExerciseReps_(match);
         out.push({
           date:     s.date,
           block:    s.block_name,
