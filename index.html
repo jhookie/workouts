@@ -1852,7 +1852,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.2';
+    const APP_VERSION = 'v34.1.3';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7997,6 +7997,53 @@
     // Pre-fill for run logger when jumping in from a training plan.
     let _planRunPrefill = null;
 
+    // v34.1.3: batch lookup of "last time you did this exercise" for a
+    // list of exercise names. Returns an object keyed by normalized name
+    // with { weight, totalReps, date, day }. Used by the plan-based lift
+    // logger to surface prev-session context on exercise cards so users
+    // don't have to navigate around while logging.
+    // One round-trip regardless of how many exercises — fetches recent
+    // lift_sessions and searches locally using normalizeExName_ (which
+    // already handles the DB/Dumbbell aliasing from v33.3).
+    async function sbPreviousLiftLookup_(exNames) {
+      const out = {};
+      if (!exNames || !exNames.length) return out;
+      const uid = currentUser.id;
+      // Fetch enough recent sessions to be confident we've seen each
+      // exercise at least once. 60 is generous for typical 3-5x/wk lifters.
+      const { data, error } = await _sb.from('lift_sessions')
+        .select('date,day,exercises')
+        .eq('user_id', uid)
+        .order('date', { ascending: false })
+        .limit(60);
+      if (error) {
+        console.warn('[prev-lift] lookup failed:', error.message);
+        return out;
+      }
+      const wanted = new Map(); // normalizedName → originalName
+      exNames.forEach(n => wanted.set(normalizeExName_(n), n));
+      const found = new Set();
+      (data || []).forEach(sess => {
+        if (found.size === wanted.size) return; // all matched, short-circuit
+        const arr = Array.isArray(sess.exercises) ? sess.exercises : [];
+        arr.forEach(ex => {
+          const key = normalizeExName_(ex.name);
+          if (!wanted.has(key) || found.has(key)) return;
+          const reps = extractExerciseReps_(ex);
+          const totalReps = reps.reduce((s, v) => s + (v || 0), 0);
+          out[key] = {
+            weight:    ex.weight != null && ex.weight !== '' ? ex.weight : null,
+            totalReps: totalReps || null,
+            reps:      reps,
+            date:      sess.date,
+            day:       sess.day,
+          };
+          found.add(key);
+        });
+      });
+      return out;
+    }
+
     // -------- Plan-based lift logger --------
     //
     // Distinct from the Programs-based Lift logger. Renders one card per
@@ -8072,6 +8119,13 @@
       const form = el('div', { id: 'planLogForm' });
       const exerciseInputs = []; // parallel to session.exercises; each { name, category, sets: [{ weightInput, repsInput, rpeInput, target }], notesInput }
 
+      // v34.1.3: batch-fetch "last time" data for every exercise in this
+      // session so we can surface prev-session weight + reps on each card.
+      // One query, then a lookup per exercise. Fails silently — an empty
+      // lookup just means no "Last time" pill renders.
+      const exNames = (session.exercises || []).map(e => e.name);
+      const prevLookup = await sbPreviousLiftLookup_(exNames).catch(() => ({}));
+
       (session.exercises || []).forEach(ex => {
         const sets = expandPlanExerciseSets_(ex);
         const exCard = el('div', { class: 'card' });
@@ -8080,6 +8134,31 @@
           el('span', { class: 'muted', style: 'font-size: 11px;' },
             ex.muscle ? `${ex.muscle} · ${sets.length} set${sets.length === 1 ? '' : 's'}` : `${sets.length} set${sets.length === 1 ? '' : 's'}`),
         ]));
+
+        // v34.1.3: "Last time" pill — shows the most recent logged weight
+        // + total reps for this exercise. Renders above the sets so users
+        // can see it while filling in weights and reps below.
+        const prev = prevLookup[normalizeExName_(ex.name)];
+        if (prev && (prev.weight != null || prev.totalReps != null)) {
+          const dateStr = prev.date
+            ? new Date(prev.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            : '';
+          const parts = [];
+          if (prev.weight != null && prev.weight !== '') {
+            parts.push(String(prev.weight) + (Number.isFinite(Number(prev.weight)) ? ' lb' : ''));
+          }
+          if (prev.reps && prev.reps.length) parts.push(prev.reps.join(' / ') + ' reps');
+          else if (prev.totalReps) parts.push(prev.totalReps + ' reps');
+          exCard.appendChild(el('div', {
+            style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; margin: -4px 0 12px; background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); border-radius: 8px; border-left: 3px solid var(--primary);',
+          }, [
+            el('div', {}, [
+              el('span', { style: 'font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; color: var(--primary);' }, 'Last time'),
+              el('div', { style: 'font-size: 13px; font-weight: 600; margin-top: 2px;' }, parts.join(' · ') || '—'),
+            ]),
+            dateStr ? el('span', { class: 'muted', style: 'font-size: 11px; white-space: nowrap;' }, dateStr) : null,
+          ]));
+        }
 
         const setInputs = [];
         sets.forEach((set, idx) => {
