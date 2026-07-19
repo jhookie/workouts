@@ -1861,7 +1861,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.6';
+    const APP_VERSION = 'v34.1.7';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7125,15 +7125,28 @@
 
     async function sbLoadUserProfile(force = false) {
       if (!force && _userProfileCache) return _userProfileCache;
-      // v33.0.2: include weekly_goals JSONB in the SELECT — was missing,
-      // which made Profile → Modalities & Goals show 0 for every goal
-      // even when Home had them set (Home uses its own query).
+      // v33.0.2: include weekly_goals JSONB in the SELECT.
+      // v34.1.7: include weight_increments JSONB for the progression suggester.
       const { data, error } = await _sb.from('user_profiles')
-        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at')
+        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at,weight_increments')
         .eq('id', currentUser.id).maybeSingle();
       if (error) { _userProfileCache = null; return null; }
       _userProfileCache = data;
       return data;
+    }
+
+    // v34.1.7: persist the user's per-equipment weight increment
+    // preferences. Merges with any existing values so callers only need
+    // to send the keys they're updating (e.g. { barbell: 2.5 }).
+    async function sbSaveWeightIncrements(inc) {
+      const existing = (_userProfileCache && _userProfileCache.weight_increments) || {};
+      const merged = { ...existing, ...(inc || {}) };
+      const { error } = await _sb.from('user_profiles')
+        .upsert({ id: currentUser.id, weight_increments: merged }, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+      // Refresh the local cache so subsequent reads see the new values.
+      if (_userProfileCache) _userProfileCache.weight_increments = merged;
+      return merged;
     }
 
     async function sbSaveOnboarding({ modalities, weeklyGoals }) {
@@ -8148,15 +8161,37 @@
       return null;
     }
 
-    // v34.1.6: smart default weight increment when the user hits the top
-    // of the range and it's time to add weight. Applies when we don't
-    // have an explicit user-configured increment (Lifting Plan Generator
-    // will let users specify this in v34.1.7). Isolation lifts get a
-    // smaller jump; everything else defaults to 5 lb.
-    function suggestedIncrement_(exName) {
+    // v34.1.6 / v34.1.7: recommend a weight increment for progression.
+    // Two-layer logic:
+    //   1. Detect equipment type from the exercise name
+    //   2. If the user has configured that equipment's smallest jump in
+    //      their profile (Lifting Plan Generator > Weight Increments),
+    //      use it. Otherwise fall back to sensible defaults.
+    // Equipment detection is conservative — when unsure, default to
+    // "barbell" (which most gyms have as +5 lb). Isolation lifts get a
+    // half-jump when the user has 2.5 lb access, otherwise a full jump.
+    function detectEquipmentType_(exName) {
+      const n = String(exName || '').toLowerCase();
+      if (/\b(dumbbell|db)\b/.test(n)) return 'dumbbell';
+      if (/\b(cable|machine|pulley|pulldown|lat.?pull|leg.?press|leg.?extension|leg.?curl|smith)\b/.test(n)) return 'cable';
+      if (/\b(kettlebell|kb)\b/.test(n)) return 'kettlebell';
+      if (/\b(barbell|bb)\b/.test(n)) return 'barbell';
+      // Common exercises that are almost always barbell in practice.
+      if (/\b(bench press|back squat|front squat|deadlift|overhead press|ohp|rdl|romanian deadlift)\b/.test(n)) return 'barbell';
+      return 'barbell'; // safe default
+    }
+    function suggestedIncrement_(exName, userIncrements) {
+      const inc = userIncrements || (typeof _userProfileCache?.weight_increments === 'object' ? _userProfileCache.weight_increments : {}) || {};
+      const equip = detectEquipmentType_(exName);
+      // User-configured value wins when present.
+      if (inc[equip] != null && Number(inc[equip]) > 0) return Number(inc[equip]);
+      // Otherwise smart defaults per equipment:
+      //   dumbbell: 5 (most gyms), barbell: 5, cable: 5, kettlebell: 5
+      // Isolation lifts get a 2.5 lb half-jump when we have no equipment
+      // signal (e.g. "Lateral Raise" — assumed dumbbell isolation).
       const n = String(exName || '').toLowerCase();
       const isolation = /\b(curl|raise|extension|fly|flye|kickback|face.?pull|reverse.?fly|pull.?over|shrug|calf.?raise|lateral)\b/;
-      if (isolation.test(n)) return 2.5;
+      if (equip === 'dumbbell' && isolation.test(n)) return 2.5;
       return 5;
     }
 
@@ -11209,6 +11244,46 @@
       });
       form.appendChild(eqCard);
 
+      // v34.1.7: Weight increments card. Asks what smallest jump the
+      // user can make per equipment category. Feeds the progression
+      // suggester so "Try heavier" pills recommend a load the user
+      // can actually put on the bar. Preloaded from user_profiles
+      // (async) so if they've set this before, we don't nag them.
+      const incCard = el('div', { class: 'card' });
+      incCard.appendChild(el('h2', {}, 'WEIGHT INCREMENTS'));
+      incCard.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: -8px; margin-bottom: 10px;' },
+        'Smallest jump you can make per equipment. Used to recommend load increases when you hit the top of a rep range.'));
+      // Load existing values from profile (best-effort; blank UI while
+      // it loads). Defaults kept in sync with the DB row when saved.
+      const INC_OPTS_STD  = [2.5, 5, 10];
+      const INC_OPTS_WIDE = [2.5, 5, 10, 15];
+      const incInputs = {}; // category → <select>
+      const mkIncRow = (label, key, opts, defaultVal) => {
+        const sel = el('select', {
+          id: 'incSel-' + key,
+          style: 'width: auto; padding: 6px 10px; font-size: 14px;',
+        }, opts.map(v => el('option', { value: String(v) }, `+${v} lb`)));
+        sel.value = String(defaultVal);
+        incInputs[key] = sel;
+        return el('div', {
+          style: 'display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border);',
+        }, [
+          el('div', { style: 'font-size: 14px;' }, label),
+          sel,
+        ]);
+      };
+      incCard.appendChild(mkIncRow('Barbell',   'barbell',  INC_OPTS_STD,  5));
+      incCard.appendChild(mkIncRow('Dumbbell',  'dumbbell', INC_OPTS_STD,  5));
+      incCard.appendChild(mkIncRow('Cable / Machine', 'cable', INC_OPTS_WIDE, 5));
+      form.appendChild(incCard);
+      // Prefill from saved profile once it loads.
+      sbLoadUserProfile().then(prof => {
+        const saved = (prof && prof.weight_increments) || {};
+        Object.keys(incInputs).forEach(k => {
+          if (saved[k] != null) incInputs[k].value = String(saved[k]);
+        });
+      }).catch(() => {});
+
       // Duration slider
       const durCard = el('div', { class: 'card' });
       durCard.appendChild(el('div', { class: 'plan-slider-hdr' }, [
@@ -11253,6 +11328,18 @@
             dows:       state.dows.slice(),
           };
           try { localStorage.setItem('liftPlanState_v1', JSON.stringify(cleanState)); } catch(e) {}
+          // v34.1.7: persist the user's weight increment picks to their
+          // profile so the progression suggester (v34.1.6) uses them next
+          // time it fires. Best-effort — a save failure doesn't block plan
+          // generation, we just log it.
+          const incPatch = {
+            barbell:  Number(incInputs.barbell?.value)  || 5,
+            dumbbell: Number(incInputs.dumbbell?.value) || 5,
+            cable:    Number(incInputs.cable?.value)    || 5,
+          };
+          sbSaveWeightIncrements(incPatch).catch(e => {
+            console.warn('[weight-increments] save failed:', e.message || e);
+          });
           renderLiftPlanOutput_(app, cleanState);
         },
       }, '▶  Generate My Plan');
