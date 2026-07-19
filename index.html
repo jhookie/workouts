@@ -1861,7 +1861,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.5';
+    const APP_VERSION = 'v34.1.6';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7944,12 +7944,12 @@
         // v34.1.5: strip superset suffix from the name and show as a
         // colored badge next to it.
         const badgeText = totalSets > 1 ? `${totalSets} sets` : '1 set';
-        const ssInfo = extractSupersetTag_(ex.name);
+        const ssInfo = extractSupersetInfo_(ex); // v34.1.6: read name OR set notes
         card.appendChild(el('div', { class: 'plan-exercise' }, [
           el('div', { class: 'plan-exercise-head' }, [
             el('div', { style: 'font-weight: 600;' }, [
               ssInfo.clean,
-              supersetBadge_(ssInfo.tag),
+              supersetBadge_(ssInfo),
             ]),
             el('span', { class: 'muted', style: 'font-size: 11px;' },
               ex.muscle ? `${ex.muscle} · ${badgeText}` : badgeText),
@@ -8012,19 +8012,45 @@
     // Pre-fill for run logger when jumping in from a training plan.
     let _planRunPrefill = null;
 
-    // v34.1.5: parse superset markers "(SS-A)" / "(SS-B)" / etc out of
-    // exercise names so we can display them as a badge in the header
-    // instead of buried in the name. Common conventions:
-    //   "Incline DB Press (SS-A)"     → { clean: 'Incline DB Press', tag: 'A' }
-    //   "Cable Fly (SS-B)"            → { clean: 'Cable Fly',        tag: 'B' }
-    //   "Dips — bodyweight (SS-B)"    → { clean: 'Dips — bodyweight', tag: 'B' }
-    //   "Regular squat"               → { clean: 'Regular squat',    tag: null }
-    // The tag becomes a colored pill in the exercise card header.
+    // v34.1.5 / v34.1.6: parse superset markers out of either
+    //   (a) the exercise name — "(SS-A)" / "(SS-B)" / "(Superset A)"
+    //   (b) per-set notes — "Superset with triceps" / "Superset w/ chest"
+    // Returns { clean, tag, target } where `tag` is a letter for A/B/C-style
+    // pairings and `target` is a descriptive body-part or exercise name for
+    // "Superset with X" prose. Either one triggers a badge in the header.
+    //
+    // Examples:
+    //   "Incline DB Press (SS-A)"     → { clean: 'Incline DB Press', tag: 'A',  target: null }
+    //   "Lateral Raise" + set.notes "Superset with triceps"
+    //                                 → { clean: 'Lateral Raise',    tag: null, target: 'triceps' }
+    //   "Regular squat"               → { clean: 'Regular squat',    tag: null, target: null }
+    function extractSupersetInfo_(exOrName) {
+      const isString = typeof exOrName === 'string';
+      const name = isString ? exOrName : String(exOrName?.name || '');
+      const sets = isString ? [] : (Array.isArray(exOrName?.sets) ? exOrName.sets : []);
+      const nameMatch = name.match(/\s*\((?:ss|superset)[\s\-–—:]*([a-z0-9]+)\)\s*/i);
+      if (nameMatch) {
+        return {
+          clean: name.replace(nameMatch[0], ' ').replace(/\s+/g, ' ').trim(),
+          tag: nameMatch[1].toUpperCase(),
+          target: null,
+        };
+      }
+      // Check per-set notes for "Superset with X" or "Superset w/ X" prose.
+      for (const set of sets) {
+        const notes = String(set?.notes || '');
+        const noteMatch = notes.match(/superset\s+(?:with|w\/?)\s+([^.,;\n]+)/i);
+        if (noteMatch) {
+          return { clean: name.trim(), tag: null, target: noteMatch[1].trim() };
+        }
+      }
+      return { clean: name.trim(), tag: null, target: null };
+    }
+    // Backward-compat shim — some earlier call sites use extractSupersetTag_
+    // and pass the name string only. Delegates to the new helper.
     function extractSupersetTag_(name) {
-      const s = String(name || '');
-      const m = s.match(/\s*\((?:ss|superset)[\s\-–—:]*([a-z0-9]+)\)\s*/i);
-      if (!m) return { clean: s.trim(), tag: null };
-      return { clean: s.replace(m[0], ' ').replace(/\s+/g, ' ').trim(), tag: m[1].toUpperCase() };
+      const info = extractSupersetInfo_(name);
+      return { clean: info.clean, tag: info.tag };
     }
     // Consistent color per superset tag so both members of "SS-A" get the
     // same badge color and users can visually pair them. Deterministic
@@ -8032,28 +8058,41 @@
     const SUPERSET_COLORS = {
       A: '#F4622C', B: '#2450C4', C: '#8CC63F', D: '#bf5af2',
     };
-    function supersetBadge_(tag) {
-      if (!tag) return null;
-      const color = SUPERSET_COLORS[tag] || 'var(--muted)';
-      return el('span', {
-        style: `display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; margin-left: 8px; background: color-mix(in srgb, ${color} 15%, transparent); color: ${color}; border: 1px solid color-mix(in srgb, ${color} 40%, transparent); border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: middle;`,
-      }, `SS ${tag}`);
+    // v34.1.6: accept either a plain tag string (legacy) or a full info
+    // object with { tag, target }. Renders a colored pill for tag-based
+    // supersets and a descriptive "SUPERSET · with X" pill for prose ones.
+    function supersetBadge_(tagOrInfo) {
+      const info = (typeof tagOrInfo === 'object' && tagOrInfo !== null)
+        ? tagOrInfo
+        : { tag: tagOrInfo, target: null };
+      if (info.tag) {
+        const color = SUPERSET_COLORS[info.tag] || 'var(--muted)';
+        return el('span', {
+          style: `display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; margin-left: 8px; background: color-mix(in srgb, ${color} 15%, transparent); color: ${color}; border: 1px solid color-mix(in srgb, ${color} 40%, transparent); border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: middle;`,
+        }, `SS ${info.tag}`);
+      }
+      if (info.target) {
+        const color = 'var(--primary)';
+        return el('span', {
+          style: `display: inline-flex; align-items: center; padding: 2px 7px; margin-left: 8px; background: color-mix(in srgb, ${color} 12%, transparent); color: ${color}; border: 1px solid color-mix(in srgb, ${color} 35%, transparent); border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: middle;`,
+        }, `SS · with ${info.target}`);
+      }
+      return null;
     }
 
-    // v34.1.3: batch lookup of "last time you did this exercise" for a
-    // list of exercise names. Returns an object keyed by normalized name
-    // with { weight, totalReps, date, day }. Used by the plan-based lift
-    // logger to surface prev-session context on exercise cards so users
-    // don't have to navigate around while logging.
-    // One round-trip regardless of how many exercises — fetches recent
-    // lift_sessions and searches locally using normalizeExName_ (which
-    // already handles the DB/Dumbbell aliasing from v33.3).
+    // v34.1.3 / v34.1.6: batch lookup of recent history for a list of
+    // exercise names. Returns object keyed by normalized name with:
+    //   { weight, totalReps, reps, date, day, history: [...] }
+    // Where `history` is the last up-to-3 sessions (newest first) — used
+    // by the progression suggester (v34.1.6) to detect "hit top of range
+    // for 2 sessions in a row" conditions. The top-level fields mirror
+    // history[0] for backward compat with the "Last time" pill.
     async function sbPreviousLiftLookup_(exNames) {
       const out = {};
       if (!exNames || !exNames.length) return out;
       const uid = currentUser.id;
-      // Fetch enough recent sessions to be confident we've seen each
-      // exercise at least once. 60 is generous for typical 3-5x/wk lifters.
+      // Fetch enough recent sessions to catch multiple instances of the
+      // same exercise. 60 sessions is generous for typical 3-5x/wk lifters.
       const { data, error } = await _sb.from('lift_sessions')
         .select('date,day,exercises')
         .eq('user_id', uid)
@@ -8065,26 +8104,86 @@
       }
       const wanted = new Map(); // normalizedName → originalName
       exNames.forEach(n => wanted.set(normalizeExName_(n), n));
-      const found = new Set();
+      const perKeyHistory = {}; // normalizedName → [{...}, {...}, ...]
+      const HISTORY_DEPTH = 3;
       (data || []).forEach(sess => {
-        if (found.size === wanted.size) return; // all matched, short-circuit
         const arr = Array.isArray(sess.exercises) ? sess.exercises : [];
         arr.forEach(ex => {
           const key = normalizeExName_(ex.name);
-          if (!wanted.has(key) || found.has(key)) return;
+          if (!wanted.has(key)) return;
+          const bucket = perKeyHistory[key] || (perKeyHistory[key] = []);
+          if (bucket.length >= HISTORY_DEPTH) return;
           const reps = extractExerciseReps_(ex);
           const totalReps = reps.reduce((s, v) => s + (v || 0), 0);
-          out[key] = {
+          bucket.push({
             weight:    ex.weight != null && ex.weight !== '' ? ex.weight : null,
             totalReps: totalReps || null,
-            reps:      reps,
+            reps,
             date:      sess.date,
             day:       sess.day,
-          };
-          found.add(key);
+          });
         });
       });
+      Object.entries(perKeyHistory).forEach(([key, history]) => {
+        const head = history[0] || {};
+        out[key] = { ...head, history };
+      });
       return out;
+    }
+
+    // v34.1.6: parse the top of a rep-range target so the progression
+    // detector knows when a set counts as "hit the top."
+    //   "10"      → 10
+    //   "8-10"    → 10
+    //   "8–10"    → 10 (em dash)
+    //   "AMRAP"   → null (special, don't auto-progress)
+    //   "5+"      → 5 (treat as at-least-5)
+    function targetRepsTopOfRange_(targetReps) {
+      if (targetReps == null || targetReps === '') return null;
+      const s = String(targetReps).trim();
+      const range = s.match(/^(\d+)\s*[-–]\s*(\d+)/);
+      if (range) return Number(range[2]);
+      const single = s.match(/^(\d+)/);
+      if (single) return Number(single[1]);
+      return null;
+    }
+
+    // v34.1.6: smart default weight increment when the user hits the top
+    // of the range and it's time to add weight. Applies when we don't
+    // have an explicit user-configured increment (Lifting Plan Generator
+    // will let users specify this in v34.1.7). Isolation lifts get a
+    // smaller jump; everything else defaults to 5 lb.
+    function suggestedIncrement_(exName) {
+      const n = String(exName || '').toLowerCase();
+      const isolation = /\b(curl|raise|extension|fly|flye|kickback|face.?pull|reverse.?fly|pull.?over|shrug|calf.?raise|lateral)\b/;
+      if (isolation.test(n)) return 2.5;
+      return 5;
+    }
+
+    // v34.1.6: given an exercise + its history, decide whether the user
+    // should try a heavier weight next session. Fires when the last 2
+    // sessions used the SAME weight AND both hit at least the top of
+    // the target rep range. Returns { from, to, increment, reason } or
+    // null. Bodyweight ("BW", "BW+X") is deliberately not auto-progressed
+    // — bodyweight loading is context-dependent (assist bands, added
+    // weight belts) and we don't want to nudge users toward changes
+    // they can't easily execute.
+    function suggestProgression_(ex, history) {
+      if (!Array.isArray(history) || history.length < 2) return null;
+      const targetReps = (ex.sets && ex.sets[0] && ex.sets[0].target_reps) || ex.target_reps;
+      const top = targetRepsTopOfRange_(targetReps);
+      if (!top) return null; // AMRAP or missing target — no auto-suggest
+      const [last, prev] = history;
+      const lastW = parseWeightNumber_(last.weight);
+      const prevW = parseWeightNumber_(prev.weight);
+      if (lastW == null || prevW == null) return null;
+      if (lastW <= 0 || prevW <= 0) return null; // bodyweight ("BW" → 0)
+      if (lastW !== prevW) return null; // weight changed between sessions
+      const lastHit = (last.reps || []).some(r => Number(r) >= top);
+      const prevHit = (prev.reps || []).some(r => Number(r) >= top);
+      if (!lastHit || !prevHit) return null;
+      const inc = suggestedIncrement_(ex.name);
+      return { from: lastW, to: lastW + inc, increment: inc, top };
     }
 
     // -------- Plan-based lift logger --------
@@ -8173,11 +8272,11 @@
         const sets = expandPlanExerciseSets_(ex);
         const exCard = el('div', { class: 'card' });
         // v34.1.5: strip superset marker from exercise name; show as badge.
-        const ssInfo = extractSupersetTag_(ex.name);
+        const ssInfo = extractSupersetInfo_(ex); // v34.1.6: read name OR set notes
         exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
           el('div', { style: 'font-weight: 600; font-size: 15px;' }, [
             ssInfo.clean,
-            supersetBadge_(ssInfo.tag),
+            supersetBadge_(ssInfo),
           ]),
           el('span', { class: 'muted', style: 'font-size: 11px;' },
             ex.muscle ? `${ex.muscle} · ${sets.length} set${sets.length === 1 ? '' : 's'}` : `${sets.length} set${sets.length === 1 ? '' : 's'}`),
@@ -8209,6 +8308,42 @@
         }
 
         const setInputs = [];
+
+        // v34.1.6: progression suggestion pill. Fires when the last 2
+        // sessions used the same weight AND both hit the top of the
+        // target rep range. Tapping the pill fills the suggested weight
+        // into all the weight inputs for this exercise so the user can
+        // just log reps + RPE for the new load.
+        const suggestion = suggestProgression_(ex, prev && prev.history);
+        if (suggestion) {
+          const incStr = suggestion.increment % 1 === 0 ? String(suggestion.increment) : suggestion.increment.toFixed(1);
+          const pill = el('div', {
+            style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; margin: 0 0 12px; background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); border-radius: 8px; border-left: 3px solid var(--accent); cursor: pointer;',
+            onclick: () => {
+              // Fill all weight inputs for this exercise with the suggested value.
+              setInputs.forEach(si => {
+                if (si.weightInp) si.weightInp.value = String(suggestion.to);
+              });
+              // Dim + swap the pill copy so it's obvious the suggestion was applied.
+              pill.style.opacity = '0.55';
+              pill.style.cursor = 'default';
+              pill.onclick = null;
+              const label = pill.querySelector('[data-label]');
+              const line = pill.querySelector('[data-line]');
+              if (label) label.textContent = 'Applied';
+              if (line) line.textContent = `${suggestion.to} lb prefilled — override any set if needed.`;
+              toast(`Prefilled ${suggestion.to} lb for ${ex.name.replace(/\s*\((?:ss|superset)[^)]*\)/i, '').trim()}`);
+            },
+          }, [
+            el('div', {}, [
+              el('span', { 'data-label': '', style: 'font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; color: var(--accent);' }, '💡 Try heavier'),
+              el('div', { 'data-line': '', style: 'font-size: 13px; font-weight: 600; margin-top: 2px;' },
+                `${suggestion.to} lb — up ${incStr} from ${suggestion.from} (hit ${suggestion.top} reps 2× in a row)`),
+            ]),
+            el('span', { style: 'font-size: 11px; color: var(--accent); font-weight: 600; white-space: nowrap;' }, 'Tap to apply →'),
+          ]);
+          exCard.appendChild(pill);
+        }
         sets.forEach((set, idx) => {
           const targetBits = [];
           if (set.set_type)         targetBits.push(set.set_type);
@@ -8462,11 +8597,11 @@
         const setsList = normalizeLoggedSets_(ex);
         const exCard = el('div', { class: 'card' });
         // v34.1.5: strip superset marker from exercise name; show as badge.
-        const ssInfo = extractSupersetTag_(ex.name);
+        const ssInfo = extractSupersetInfo_(ex); // v34.1.6: read name OR set notes
         exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
           el('div', { style: 'font-weight: 600; font-size: 15px;' }, [
             ssInfo.clean,
-            supersetBadge_(ssInfo.tag),
+            supersetBadge_(ssInfo),
           ]),
           el('span', { class: 'muted', style: 'font-size: 11px;' },
             ex.category ? `${ex.category} · ${setsList.length} set${setsList.length === 1 ? '' : 's'}` : `${setsList.length} set${setsList.length === 1 ? '' : 's'}`),
@@ -9762,10 +9897,10 @@
             const wrap = $('#addShoeForm');
             const show = wrap.style.display === 'none';
             wrap.style.display = show ? 'block' : 'none';
-            addBtn.textContent = show ? 'Cancel' : '+ Add shoe';
+            addBtn.textContent = show ? 'Cancel' : '+ Add gear';
             if (show) nameI.focus();
           },
-        }, '+ Add shoe');
+        }, '+ Add gear');
 
         card.appendChild(addBtn);
         card.appendChild(formWrap);
