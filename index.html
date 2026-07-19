@@ -1213,7 +1213,10 @@
       height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden;
       margin-top: 8px;
     }
-    .shoe-bar-fill { height: 100%; background: var(--success); border-radius: 3px; }
+    /* v34.1.1: gear mileage bar uses the brand accent (orange) as its
+       baseline fill so it matches Analytics + other progress affordances.
+       Warning/danger overrides below still trigger at 300 mi / 450 mi. */
+    .shoe-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
     .shoe-bar-fill.warn  { background: var(--warn); }
     .shoe-bar-fill.danger { background: var(--danger); }
 
@@ -1849,7 +1852,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1';
+    const APP_VERSION = 'v34.1.1';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -3488,6 +3491,20 @@
         .replace(/\bbodyweight\b/g, '')
         .replace(/\bweighted\b/g,   '')
         .replace(/\s+/g, ' ').trim();
+      // 9) v34.1.1: "flat" is often used as a modifier meaning "flat bench"
+      //    (as opposed to incline/decline). "Flat DB Press" and "DB Bench
+      //    Press" refer to the same lift. Strip standalone "flat" so both
+      //    fold into the same normalized key. Only applies as an adjective
+      //    (word "flat" as its own token, not inside another word).
+      x = x.replace(/\bflat\b/g, '').replace(/\s+/g, ' ').trim();
+      // 10) v34.1.1: "[qualifier] press" alone (dumbbell/barbell/kettlebell
+      //    press with no other modifier) is idiomatic shorthand for the
+      //    bench press variant. Insert "bench" so it collapses to the same
+      //    key as an explicit "dumbbell bench press". Guarded to only fire
+      //    when no other press modifier is present, so "leg press", "shoulder
+      //    press", "incline dumbbell press", etc. keep their identity.
+      const qualifierPressAlone = /^(dumbbell|barbell|kettlebell) press$/;
+      if (qualifierPressAlone.test(x)) x = x.replace(/press$/, 'bench press');
       return x;
     }
 
@@ -5683,12 +5700,14 @@
         const nRun  = (day.runs       || []).length;
         const nWalk = (day.walks      || []).length;
         const nAct  = (day.activities || []).length;
-        const nPull = (day.pullupsAll || []).length;
+        // v34.1.1: Pull-Ups folded into Strength (v33.5). Legacy pullup_sessions
+        // rows still exist in the DB but no longer render their own dot on
+        // the calendar or entries in the day-detail. Users who want pull-ups
+        // tracked log them as an exercise inside a Lift session.
         for (let i = 0; i < nLift; i++) dots.push(el('div', { class: 'cal-dot lift' }));
         for (let i = 0; i < nRun;  i++) dots.push(el('div', { class: 'cal-dot run' }));
         for (let i = 0; i < nWalk; i++) dots.push(el('div', { class: 'cal-dot walk' }));
         for (let i = 0; i < nAct;  i++) dots.push(el('div', { class: 'cal-dot activity' }));
-        for (let i = 0; i < nPull; i++) dots.push(el('div', { class: 'cal-dot pull' }));
         const hasAny = dots.length > 0;
         const isToday = day.date === todayISOStr;
         const cls = 'cal-day' + (hasAny ? ' has-activity' : '') + (isToday ? ' today' : '');
@@ -5708,13 +5727,13 @@
       gridContainer.appendChild(el('div', { id: 'calDetail', class: 'cal-detail' }));
 
       // Legend
+      // v34.1.1: Pull-Ups folded into Strength (v33.5). Drop from legend.
       gridContainer.appendChild(el('div', { class: 'card', style: 'margin-top: 12px; font-size: 12px; padding: 10px 14px;' }, [
         el('div', { style: 'display: flex; gap: 12px; flex-wrap: wrap;' }, [
           el('span', {}, [el('span', { class: 'cal-dot lift',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Lift']),
           el('span', {}, [el('span', { class: 'cal-dot run',      style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Run']),
           el('span', {}, [el('span', { class: 'cal-dot walk',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Walk']),
           el('span', {}, [el('span', { class: 'cal-dot activity', style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Ride/Hike/etc.']),
-          el('span', {}, [el('span', { class: 'cal-dot pull',     style: 'display: inline-block; margin-right: 4px; vertical-align: middle;' }), 'Pull-Ups']),
         ]),
       ]));
     }
@@ -5991,14 +6010,9 @@
         ]));
       });
 
-      (day.pullupsAll || []).forEach(pull => {
-        items.push(el('div', { style: 'padding: 8px 0; border-bottom: 1px solid var(--border);' }, [
-          el('div', { style: 'font-weight: 600; color: #7affb7;' }, 'Pull-Ups'),
-          el('div', { class: 'muted', style: 'font-size: 13px;' },
-            `${pull.total} reps · ${pull.weight || 'BW'}`),
-          pull.id ? editBtn(() => { _pullupsEditRef = { id: pull.id }; render('pullups-edit'); }) : null,
-        ]));
-      });
+      // v34.1.1: Pull-Ups folded into Strength; legacy pullup_sessions rows
+      // no longer render in the day-detail. Data is still in the DB —
+      // users can access it via a direct DB query if needed.
       if (!items.length) {
         card.appendChild(el('div', { class: 'muted', style: 'font-size: 14px;' }, 'No activity logged.'));
       } else {
@@ -9476,7 +9490,13 @@
       skel.remove();
 
       // PR badges
-      if (prof.bestEfforts && prof.bestEfforts.length) {
+      // v34.1.1: gate Best Efforts by the user's running modality so
+      // non-runners with residual imported data don't see it. Fails
+      // permissive — if we can't load the profile, show it (as before).
+      const userProfile_ = await sbLoadUserProfile().catch(() => null);
+      const userMods_ = new Set((userProfile_ && Array.isArray(userProfile_.modalities)) ? userProfile_.modalities : []);
+      const showBestEfforts = userMods_.size === 0 || userMods_.has('running');
+      if (showBestEfforts && prof.bestEfforts && prof.bestEfforts.length) {
         const grid = el('div', { class: 'pr-grid' });
         prof.bestEfforts.forEach(pr => {
           grid.appendChild(el('div', { class: 'pr-badge' }, [
@@ -9493,10 +9513,15 @@
         ]));
       }
 
-      // Shoes — always render the card so the "Add shoe" button is reachable
-      // even when no shoes exist yet.
+      // Gear — always render the card so the "Add gear" button is reachable
+      // even when no gear exists yet.
+      // v34.1.1: renamed section from "Shoes" to "Gear". Data model still
+      // uses the `shoes` table (single type for now) — real multi-type
+      // gear (bikes, skis, kayaks) is a v34.3+ data-model rework. The
+      // label change today just gives us room to grow into it later
+      // without another rename.
       {
-        const card = el('div', { class: 'card' }, [el('h2', {}, 'Shoes')]);
+        const card = el('div', { class: 'card' }, [el('h2', {}, 'Gear')]);
         const shoes = prof.shoes || [];
         const active = shoes.filter(s => s.active);
         const retired = shoes.filter(s => !s.active);
@@ -9519,7 +9544,7 @@
           });
         } else {
           card.appendChild(el('div', { class: 'muted', style: 'font-size: 13px; margin: 8px 0;' },
-            'No active shoes yet. Add one below to start tracking mileage.'));
+            'No active gear yet. Add a pair of shoes below to start tracking mileage.'));
         }
 
         if (retired.length) {
@@ -11189,6 +11214,29 @@
       return { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' }[phase] || phase;
     }
 
+    // v34.1.1: map a session kind to the same colors used in the Pace
+    // Zones card. Lets the weekly session cards visually reference the
+    // pace zone they'll be run at — user sees the color and knows it's
+    // a threshold day without reading the description.
+    const COACH_ZONE_COLORS = {
+      easy:       { color: '#32d74b', label: 'Easy' },
+      long:       { color: '#5ac8fa', label: 'Long/Marathon' },
+      marathon:   { color: '#5ac8fa', label: 'Marathon' },
+      tempo:      { color: '#ff9f0a', label: 'Threshold' },
+      threshold:  { color: '#ff9f0a', label: 'Threshold' },
+      interval:   { color: '#ff453a', label: 'Interval' },
+      vo2:        { color: '#ff453a', label: 'Interval' },
+      repetition: { color: '#bf5af2', label: 'Repetition' },
+      rep:        { color: '#bf5af2', label: 'Repetition' },
+    };
+    function coachZoneForKind_(kind) {
+      const k = String(kind || '').toLowerCase();
+      for (const key of Object.keys(COACH_ZONE_COLORS)) {
+        if (k.includes(key)) return COACH_ZONE_COLORS[key];
+      }
+      return COACH_ZONE_COLORS.easy;
+    }
+
     // Estimate a session's duration in minutes given the paces.
     // Used for the soft session-length warning.
     function coachEstimateDuration_(sess, paces) {
@@ -11338,12 +11386,12 @@
       root.innerHTML = `
         <div class="card" style="background: color-mix(in srgb, var(--primary) 6%, var(--surface));">
           <div style="font-size: 12px; color: var(--primary); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700;">
-            Powered by VDOT
+            VDOT-Based Coaching
           </div>
           <div style="margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--text);">
-            Coach's Edition uses Jack Daniels' VDOT methodology to compute your training paces from a recent race,
-            then builds a periodized plan that peaks and tapers around your race date. Add a coaching note for
-            each week so you know <em>why</em> the plan looks the way it does.
+            Coach's Edition uses VDOT pace zones from a recent race, then builds a periodized plan that
+            peaks and tapers around your race date. Each week comes with a short coaching note so you know
+            <em>why</em> the plan looks the way it does.
           </div>
         </div>
 
@@ -11632,10 +11680,17 @@
         wk.sessions.forEach(sess => {
           const durMin = coachEstimateDuration_(sess, plan.paces);
           const overTarget = durMin > state.sessLen;
-          wkCard.appendChild(el('div', { style: 'padding: 10px 0; border-top: 1px solid var(--border); margin-top: 10px;' }, [
+          // v34.1.1: color-code each session by its pace zone so users
+          // can see at a glance whether a day is easy, threshold, or
+          // interval work. Colors match the Pace Zones card above.
+          const zone = coachZoneForKind_(sess.kind);
+          wkCard.appendChild(el('div', {
+            style: `padding: 10px 0 10px 12px; border-top: 1px solid var(--border); margin-top: 10px; border-left: 3px solid ${zone.color}; margin-left: -4px; padding-left: 10px;`,
+          }, [
             el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' }, [
               el('div', { style: 'font-weight: 700; font-size: 14px;' }, [
                 sess.name,
+                el('span', { style: `margin-left: 8px; font-size: 10px; color: ${zone.color}; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;` }, zone.label),
                 overTarget ? el('span', { title: `${durMin} min > ${state.sessLen} min target`, style: 'margin-left: 6px; color: var(--danger, #D93A2B); font-size: 12px;' }, `⚠️ ~${durMin} min`) : null,
               ]),
               el('span', { class: 'muted', style: 'font-size: 12px; white-space: nowrap;' }, `${sess.dist} mi${!overTarget ? ` · ~${durMin} min` : ''}`),
