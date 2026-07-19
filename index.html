@@ -1861,7 +1861,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.7';
+    const APP_VERSION = 'v34.1.8';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7127,9 +7127,22 @@
       if (!force && _userProfileCache) return _userProfileCache;
       // v33.0.2: include weekly_goals JSONB in the SELECT.
       // v34.1.7: include weight_increments JSONB for the progression suggester.
-      const { data, error } = await _sb.from('user_profiles')
-        .select('id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at,weight_increments')
-        .eq('id', currentUser.id).maybeSingle();
+      // v34.1.8: defensive fallback — if the migration for v34.1.7 hasn't
+      // been run yet, the primary SELECT will 400 on the missing column.
+      // Retry without it so the profile still loads and users don't get
+      // dumped into the onboarding wizard on refresh. Same pattern any
+      // future additive column can use.
+      const FULL_COLS = 'id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at,weight_increments';
+      const SAFE_COLS = 'id,display_name,weekly_run_count_goal,weekly_lift_count_goal,weekly_goals,modalities,dashboard_widgets,onboarded_at';
+      let { data, error } = await _sb.from('user_profiles')
+        .select(FULL_COLS).eq('id', currentUser.id).maybeSingle();
+      if (error && /weight_increments|column .* does not exist/i.test(error.message || '')) {
+        console.warn('[profile] weight_increments column missing — falling back. Run weight_increments_migration.sql in Supabase to enable progression increments.');
+        const retry = await _sb.from('user_profiles')
+          .select(SAFE_COLS).eq('id', currentUser.id).maybeSingle();
+        data = retry.data;
+        error = retry.error;
+      }
       if (error) { _userProfileCache = null; return null; }
       _userProfileCache = data;
       return data;
@@ -7138,13 +7151,26 @@
     // v34.1.7: persist the user's per-equipment weight increment
     // preferences. Merges with any existing values so callers only need
     // to send the keys they're updating (e.g. { barbell: 2.5 }).
+    // v34.1.8: switched from upsert to update. Upsert with only { id,
+    // weight_increments } was intended to be safe (ON CONFLICT DO
+    // UPDATE only touches the listed columns), but a defensive update
+    // is easier to reason about and can't accidentally clobber other
+    // profile fields under any circumstance. Also fails soft when the
+    // column doesn't exist yet — we don't want the LPG Generate button
+    // to error out on a fresh install.
     async function sbSaveWeightIncrements(inc) {
       const existing = (_userProfileCache && _userProfileCache.weight_increments) || {};
       const merged = { ...existing, ...(inc || {}) };
       const { error } = await _sb.from('user_profiles')
-        .upsert({ id: currentUser.id, weight_increments: merged }, { onConflict: 'id' });
-      if (error) throw new Error(error.message);
-      // Refresh the local cache so subsequent reads see the new values.
+        .update({ weight_increments: merged })
+        .eq('id', currentUser.id);
+      if (error) {
+        if (/weight_increments|column .* does not exist/i.test(error.message || '')) {
+          console.warn('[weight-increments] save skipped — column missing. Run weight_increments_migration.sql.');
+          return merged; // no-op success
+        }
+        throw new Error(error.message);
+      }
       if (_userProfileCache) _userProfileCache.weight_increments = merged;
       return merged;
     }
@@ -9896,14 +9922,19 @@
         }
 
         // Add-shoe form (collapsed by default; expand on button tap)
+        // v34.1.8: form fields renamed to generic Gear terminology. Data
+        // model still writes to the `shoes` table (mileage-tracked items).
+        // When we ship the multi-type Gear rework (v34.3+) this form will
+        // grow a Type picker (shoe / bike / etc); until then it accepts
+        // anything with mileage.
         const formWrap = el('div', { id: 'addShoeForm', style: 'display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);' });
-        const nameI    = el('input', { id: 'newShoeName',   type: 'text',   placeholder: 'e.g. Nike Pegasus 41' });
+        const nameI    = el('input', { id: 'newShoeName',   type: 'text',   placeholder: 'e.g. Nike Pegasus 41, Trek Domane' });
         const milesI   = el('input', { id: 'newShoeMiles',  type: 'number', step: '1', inputmode: 'numeric', placeholder: '0', value: '0' });
         const activeCk = el('input', { id: 'newShoeActive', type: 'checkbox' });
         activeCk.checked = true;
 
-        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Shoe name'),         nameI]));
-        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Existing miles'),    milesI]));
+        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Gear name'),         nameI]));
+        formWrap.appendChild(el('div', { class: 'field' }, [el('label', {}, 'Existing mileage'),  milesI]));
         formWrap.appendChild(el('div', {
           class: 'field',
           style: 'display: flex; align-items: center; gap: 8px;',
@@ -9918,13 +9949,13 @@
             const miles = Number(milesI.value) || 0;
             try {
               await sbAddShoe({ name, active: activeCk.checked, initialMiles: miles });
-              toast('Shoe added');
+              toast('Gear added');
               render('profile');
             } catch (e) {
               toast('Could not save: ' + e.message, true);
             }
           },
-        }, 'Save shoe'));
+        }, 'Save gear'));
 
         const addBtn = el('button', {
           style: 'margin-top: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);',
