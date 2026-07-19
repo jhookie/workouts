@@ -1651,6 +1651,15 @@
       return { ok: true };
     }
 
+    // v34.1.5: set active flag on an existing gear row. Used by the
+    // retired-gear list to reactivate a shoe (e.g. brought back for
+    // a specific race, second life as a mud shoe, etc).
+    async function sbSetShoeActive(id, active) {
+      const { error } = await _sb.from('shoes').update({ active: !!active }).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
     // -------- Programs --------
     async function sbListPrograms() {
       const uid = currentUser.id;
@@ -1852,7 +1861,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.3';
+    const APP_VERSION = 'v34.1.5';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -7932,10 +7941,16 @@
         if (lastChild && lastChild.style) lastChild.style.borderBottom = 'none';
 
         // Set-count badge on the exercise header for at-a-glance scanning.
+        // v34.1.5: strip superset suffix from the name and show as a
+        // colored badge next to it.
         const badgeText = totalSets > 1 ? `${totalSets} sets` : '1 set';
+        const ssInfo = extractSupersetTag_(ex.name);
         card.appendChild(el('div', { class: 'plan-exercise' }, [
           el('div', { class: 'plan-exercise-head' }, [
-            el('div', { style: 'font-weight: 600;' }, ex.name),
+            el('div', { style: 'font-weight: 600;' }, [
+              ssInfo.clean,
+              supersetBadge_(ssInfo.tag),
+            ]),
             el('span', { class: 'muted', style: 'font-size: 11px;' },
               ex.muscle ? `${ex.muscle} · ${badgeText}` : badgeText),
           ]),
@@ -7996,6 +8011,34 @@
 
     // Pre-fill for run logger when jumping in from a training plan.
     let _planRunPrefill = null;
+
+    // v34.1.5: parse superset markers "(SS-A)" / "(SS-B)" / etc out of
+    // exercise names so we can display them as a badge in the header
+    // instead of buried in the name. Common conventions:
+    //   "Incline DB Press (SS-A)"     → { clean: 'Incline DB Press', tag: 'A' }
+    //   "Cable Fly (SS-B)"            → { clean: 'Cable Fly',        tag: 'B' }
+    //   "Dips — bodyweight (SS-B)"    → { clean: 'Dips — bodyweight', tag: 'B' }
+    //   "Regular squat"               → { clean: 'Regular squat',    tag: null }
+    // The tag becomes a colored pill in the exercise card header.
+    function extractSupersetTag_(name) {
+      const s = String(name || '');
+      const m = s.match(/\s*\((?:ss|superset)[\s\-–—:]*([a-z0-9]+)\)\s*/i);
+      if (!m) return { clean: s.trim(), tag: null };
+      return { clean: s.replace(m[0], ' ').replace(/\s+/g, ' ').trim(), tag: m[1].toUpperCase() };
+    }
+    // Consistent color per superset tag so both members of "SS-A" get the
+    // same badge color and users can visually pair them. Deterministic
+    // palette (A=orange, B=blue, C=green, D=purple, else muted).
+    const SUPERSET_COLORS = {
+      A: '#F4622C', B: '#2450C4', C: '#8CC63F', D: '#bf5af2',
+    };
+    function supersetBadge_(tag) {
+      if (!tag) return null;
+      const color = SUPERSET_COLORS[tag] || 'var(--muted)';
+      return el('span', {
+        style: `display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; margin-left: 8px; background: color-mix(in srgb, ${color} 15%, transparent); color: ${color}; border: 1px solid color-mix(in srgb, ${color} 40%, transparent); border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: middle;`,
+      }, `SS ${tag}`);
+    }
 
     // v34.1.3: batch lookup of "last time you did this exercise" for a
     // list of exercise names. Returns an object keyed by normalized name
@@ -8129,8 +8172,13 @@
       (session.exercises || []).forEach(ex => {
         const sets = expandPlanExerciseSets_(ex);
         const exCard = el('div', { class: 'card' });
+        // v34.1.5: strip superset marker from exercise name; show as badge.
+        const ssInfo = extractSupersetTag_(ex.name);
         exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
-          el('div', { style: 'font-weight: 600; font-size: 15px;' }, ex.name),
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, [
+            ssInfo.clean,
+            supersetBadge_(ssInfo.tag),
+          ]),
           el('span', { class: 'muted', style: 'font-size: 11px;' },
             ex.muscle ? `${ex.muscle} · ${sets.length} set${sets.length === 1 ? '' : 's'}` : `${sets.length} set${sets.length === 1 ? '' : 's'}`),
         ]));
@@ -8413,8 +8461,13 @@
       exercisesArr.forEach(ex => {
         const setsList = normalizeLoggedSets_(ex);
         const exCard = el('div', { class: 'card' });
+        // v34.1.5: strip superset marker from exercise name; show as badge.
+        const ssInfo = extractSupersetTag_(ex.name);
         exCard.appendChild(el('div', { class: 'plan-exercise-head', style: 'margin-bottom: 10px;' }, [
-          el('div', { style: 'font-weight: 600; font-size: 15px;' }, ex.name),
+          el('div', { style: 'font-weight: 600; font-size: 15px;' }, [
+            ssInfo.clean,
+            supersetBadge_(ssInfo.tag),
+          ]),
           el('span', { class: 'muted', style: 'font-size: 11px;' },
             ex.category ? `${ex.category} · ${setsList.length} set${setsList.length === 1 ? '' : 's'}` : `${setsList.length} set${setsList.length === 1 ? '' : 's'}`),
         ]));
@@ -9626,9 +9679,50 @@
             'No active gear yet. Add a pair of shoes below to start tracking mileage.'));
         }
 
+        // v34.1.5: retired gear used to be a static muted line ("Retired:
+        // Nike, Brooks, ...") with no interaction. Now it's a collapsible
+        // list of small cards showing lifetime mileage + a Reactivate
+        // button per item. Users who bring a shoe back into rotation can
+        // do it in-app instead of adding a new duplicate.
         if (retired.length) {
-          card.appendChild(el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 10px;' },
-            `Retired: ${retired.map(r => r.name).join(', ')}`));
+          const retiredWrap = el('div', { style: 'margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);' });
+          const retiredToggle = el('button', {
+            style: 'background: transparent; color: var(--muted); border: none; padding: 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; cursor: pointer; width: auto; text-align: left;',
+            onclick: () => {
+              const listEl = document.getElementById('retiredGearList');
+              if (!listEl) return;
+              const isHidden = listEl.style.display === 'none';
+              listEl.style.display = isHidden ? 'block' : 'none';
+              retiredToggle.textContent = (isHidden ? '▼ ' : '▶ ') + `${retired.length} retired`;
+            },
+          }, `▶ ${retired.length} retired`);
+          retiredWrap.appendChild(retiredToggle);
+          const listWrap = el('div', { id: 'retiredGearList', style: 'display: none; margin-top: 10px;' });
+          retired.forEach(s => {
+            const mi = s.totalMiles || 0;
+            listWrap.appendChild(el('div', {
+              style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 6px; background: var(--surface-2); border-radius: 8px; opacity: 0.78;',
+            }, [
+              el('div', { style: 'min-width: 0; flex: 1;' }, [
+                el('div', { style: 'font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;' }, s.name),
+                el('div', { class: 'muted', style: 'font-size: 11px; margin-top: 2px;' }, `${mi} mi lifetime`),
+              ]),
+              el('button', {
+                style: 'background: transparent; color: var(--primary); border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); padding: 4px 10px; font-size: 12px; font-weight: 600; width: auto; border-radius: 6px; white-space: nowrap;',
+                onclick: async () => {
+                  try {
+                    await sbSetShoeActive(s.id, true);
+                    toast(`Reactivated "${s.name}"`);
+                    render('profile');
+                  } catch (e) {
+                    toast('Could not reactivate: ' + (e.message || e), true);
+                  }
+                },
+              }, 'Reactivate'),
+            ]));
+          });
+          retiredWrap.appendChild(listWrap);
+          card.appendChild(retiredWrap);
         }
 
         // Add-shoe form (collapsed by default; expand on button tap)
