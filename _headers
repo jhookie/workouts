@@ -1,0 +1,24 @@
+# Netlify HTTP header rules for Loggbok.
+#
+# The service worker + index.html must NEVER be cached at the CDN or
+# browser level, otherwise deploys don't take effect until the user
+# manually clears their browser cache. Everything else (icons, static
+# assets) can cache normally.
+#
+# `no-cache` = browser must revalidate with the server on every load.
+# It does NOT mean "don't cache" — it means "check freshness first."
+# For sw.js this is critical: a stale SW keeps serving the old app
+# indefinitely, and PWA users only see updates when they force-clear.
+
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+  Service-Worker-Allowed: /
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/manifest.json
+  Cache-Control: public, max-age=0, must-revalidate
