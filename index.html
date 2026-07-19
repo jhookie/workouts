@@ -21,8 +21,9 @@
   <title>Loggbok</title>
   <style>
     /* Loggbok brand tokens — light theme. Palette + type from the brand
-       style guide. Dark theme is preserved conceptually via a data-theme
-       attribute hook we can flip later if we build a light/dark toggle. */
+       style guide. v34.2: dark theme is now real — activated via
+       data-theme="dark" on <html>, either explicitly (user toggle in
+       Profile) or automatically via prefers-color-scheme media query. */
     :root {
       /* Canvas + surfaces */
       --bg: #F4F7FF;          /* soft blue-white page background */
@@ -53,6 +54,53 @@
       --radius-pill: 22px;
       --shadow: 0 1px 3px rgba(15, 25, 60, 0.06), 0 2px 12px rgba(15, 25, 60, 0.05);
       --shadow-hover: 0 2px 6px rgba(15, 25, 60, 0.08), 0 4px 20px rgba(15, 25, 60, 0.08);
+    }
+
+    /* v34.2: dark theme — brand-consistent. Backgrounds flip to near-black
+       with a blue undertone (preserves the "Loggbok" feel in low light);
+       primary + accent brighten slightly to hit WCAG contrast on dark
+       surfaces without going neon. Applied when [data-theme="dark"] is
+       set on <html>, or automatically via prefers-color-scheme when the
+       user's saved preference is null/"system". */
+    :root[data-theme="dark"] {
+      --bg: #0F1420;
+      --surface: #1B2233;
+      --surface-2: #263048;
+      --border: #2E3852;
+      --text: #E8ECF5;
+      --muted: #9CA6BC;
+      --muted-cool: #7A85A0;
+      --primary: #6D8FE5;        /* lifted for contrast on dark bg */
+      --primary-dark: #4A6ACC;
+      --primary-ink: #C8D3F0;    /* inverted — used for hero text on dark */
+      --accent: #FF8656;
+      --accent-dark: #E65E30;
+      --success: #A9E266;
+      --warn: #D6B074;
+      --danger: #FF6B5A;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 2px 12px rgba(0, 0, 0, 0.25);
+      --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 4px 20px rgba(0, 0, 0, 0.35);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root[data-theme="system"] {
+        --bg: #0F1420;
+        --surface: #1B2233;
+        --surface-2: #263048;
+        --border: #2E3852;
+        --text: #E8ECF5;
+        --muted: #9CA6BC;
+        --muted-cool: #7A85A0;
+        --primary: #6D8FE5;
+        --primary-dark: #4A6ACC;
+        --primary-ink: #C8D3F0;
+        --accent: #FF8656;
+        --accent-dark: #E65E30;
+        --success: #A9E266;
+        --warn: #D6B074;
+        --danger: #FF6B5A;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 2px 12px rgba(0, 0, 0, 0.25);
+        --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 4px 20px rgba(0, 0, 0, 0.35);
+      }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -176,7 +224,7 @@
       -webkit-appearance: none; appearance: none;
       width: 22px; height: 22px; margin: 1px 0 0 0; flex-shrink: 0;
       border: 2px solid var(--border); border-radius: 5px;
-      background: #FFFFFF; cursor: pointer; position: relative;
+      background: var(--surface); cursor: pointer; position: relative;
       transition: border-color 0.15s, background 0.15s;
       padding: 0;
     }
@@ -283,7 +331,7 @@
     .auth-title { font-size:44px; font-weight:700; margin-bottom:6px; letter-spacing:-0.02em; color:var(--primary-ink); }
     .auth-sub { color:var(--muted); font-size:15px; text-align:center; margin-bottom:28px; font-style:italic; }
     .auth-card { width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; display:flex; flex-direction:column; gap:12px; box-shadow:var(--shadow); }
-    .auth-card input[type="email"] { width:100%; background:#FFF; border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:16px; padding:14px 16px; transition:border-color .15s; font-family:'Work Sans',sans-serif; }
+    .auth-card input[type="email"] { width:100%; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:16px; padding:14px 16px; transition:border-color .15s; font-family:'Work Sans',sans-serif; }
     .auth-card input[type="email"]::placeholder { color:var(--muted); }
     .auth-card input[type="email"]:focus { outline:none; border-color:var(--primary); }
     .auth-confirm { text-align:center; padding:8px 0; }
@@ -319,7 +367,8 @@
        styling still works. Custom checkboxes (like the walk-break toggle)
        opt-in via their own selectors. */
     input:not([type="checkbox"]):not([type="radio"]), select, textarea {
-      background: #FFFFFF;
+      /* v34.2: use --surface so inputs invert cleanly in dark mode. */
+      background: var(--surface);
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -336,7 +385,7 @@
       -webkit-appearance: none; appearance: none;
       width: 20px; height: 20px; margin: 0; flex-shrink: 0;
       border: 2px solid var(--border); border-radius: 4px;
-      background: #FFFFFF; cursor: pointer; position: relative;
+      background: var(--surface); cursor: pointer; position: relative;
       transition: border-color 0.15s, background 0.15s;
       padding: 0;
     }
@@ -1861,7 +1910,35 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.8';
+    const APP_VERSION = 'v34.2';
+
+    // v34.2: theme system. Three values persisted in localStorage:
+    //   'light' — always light
+    //   'dark'  — always dark
+    //   'system' (or unset) — follows OS preference via prefers-color-scheme
+    // Applied by setting document.documentElement.dataset.theme; the
+    // pre-paint init below runs at script load so users who prefer dark
+    // never see a flash of light theme when the page first mounts.
+    const THEME_KEY = 'loggbok_theme';
+    function getSavedTheme_() {
+      try {
+        const v = localStorage.getItem(THEME_KEY);
+        return (v === 'light' || v === 'dark') ? v : 'system';
+      } catch (e) { return 'system'; }
+    }
+    function applyTheme_(mode) {
+      document.documentElement.dataset.theme = mode || 'system';
+    }
+    function setTheme_(mode) {
+      try {
+        if (mode === 'system') localStorage.removeItem(THEME_KEY);
+        else localStorage.setItem(THEME_KEY, mode);
+      } catch (e) {}
+      applyTheme_(mode);
+    }
+    // Pre-paint: apply the saved theme before any UI renders so the
+    // first frame matches user preference (no light-mode flash).
+    applyTheme_(getSavedTheme_());
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -10052,6 +10129,42 @@
         el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px; line-height: 1.4;' },
           'Customize which color represents each modality on the calendar. Saves to this device.'),
       ]));
+
+      // v34.2: Appearance / theme toggle. Three-way — Light, Dark, System
+      // (follows OS). Saves to localStorage; applied pre-paint on next
+      // load so no flash of the wrong theme.
+      {
+        const appearanceCard = el('div', { class: 'card', style: 'margin-top: 4px;' }, [
+          el('h2', {}, 'Appearance'),
+          el('div', { class: 'muted', style: 'font-size: 13px; margin-top: -4px; margin-bottom: 12px;' },
+            'Light for daytime clarity, dark for evening logging.'),
+        ]);
+        const currentTheme = getSavedTheme_();
+        const themeRow = el('div', { style: 'display: flex; gap: 8px;' });
+        const themes = [
+          { id: 'light',  label: '☀️ Light' },
+          { id: 'dark',   label: '🌙 Dark' },
+          { id: 'system', label: '⚙️ System' },
+        ];
+        themes.forEach(t => {
+          const isActive = currentTheme === t.id;
+          const btn = el('button', {
+            style: 'flex: 1; padding: 10px 8px; font-size: 13px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border);'
+                 + (isActive
+                     ? ' background: var(--primary); color: #FFFFFF; border-color: var(--primary);'
+                     : ' background: var(--surface-2); color: var(--text);'),
+            onclick: () => {
+              setTheme_(t.id);
+              // Re-render Profile so the selected chip state updates.
+              render('profile');
+              toast(`Theme: ${t.label.replace(/^[^ ]+\s/, '')}`);
+            },
+          }, t.label);
+          themeRow.appendChild(btn);
+        });
+        appearanceCard.appendChild(themeRow);
+        app.appendChild(appearanceCard);
+      }
 
       // Account / sign out
       app.appendChild(el('div', { class: 'card', style: 'margin-top: 4px;' }, [
