@@ -1852,7 +1852,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.1.1';
+    const APP_VERSION = 'v34.1.2';
 
     // Insert a feedback row. Rating optional. Message required.
     async function sbSendFeedback({ rating, message, contextView }) {
@@ -6682,7 +6682,7 @@
           el('span', { class: 'muted', style: 'font-size: 12px;' }, 'Open →'),
         ]),
         el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px; line-height: 1.4;' },
-          'Jack Daniels VDOT paces from a recent race, taper anchored to race day, per-week coaching narratives explaining why each week looks the way it does.'),
+          'VDOT-based pace zones from a recent race, taper anchored to race day, per-week coaching narratives explaining why each week looks the way it does.'),
       ]));
       // v33: Lifting Plan Generator
       builderWrap.appendChild(el('div', {
@@ -11169,44 +11169,58 @@
       return 'base';
     }
 
+    // v34.1.1: narratives are now grounded in what the plan generator
+    // actually produced for the week. Special weeks (first tempo, first
+    // interval, cutback, race week) get bespoke narratives. Generic
+    // weeks pull from phase-safe pools that don't claim specific events.
     const COACH_NARRATIVES = {
+      // Phase-generic — safe to say in any week within the phase.
       base: [
-        "Kicking off with easy aerobic work. Every run this week should feel conversational — if you can't talk, slow down.",
-        "Base building continues. The goal is time on feet, not speed. Resist the urge to push the pace.",
-        "Still in base. Consistency beats intensity right now — showing up 3-4 times this week matters more than any single workout.",
-        "Last easy-only week before we add sharper work. Nail your easy pace so you have room to add intensity without burning out.",
+        "Easy aerobic work. Every run should feel conversational — if you can't talk, slow down.",
+        "Base building. The goal is time on feet, not speed. Resist the urge to push the pace.",
+        "Consistency beats intensity right now. Showing up matters more than any single workout.",
+        "Last easy-only week before quality work starts. Nail your easy pace so you have room to add intensity.",
       ],
       build: [
-        "First workout week. The tempo run teaches your body to clear lactate faster — you'll feel it in your legs, but recover quickly.",
-        "Adding a bit more volume + a second quality session. Keep easy runs truly easy so you can crush the hard ones.",
-        "Intervals enter the picture. These are short and fast — the goal is running form and neuromuscular sharpness, not death.",
-        "Volume peak week for this block. If anything hurts, back off — better to lose a session than a month.",
-        "Cutback week. Volume drops 20-30% so your body can absorb the last three weeks of work. Don't skip the easy days.",
+        "Aerobic base is set. Build phase mixes easy volume with a weekly quality session. Keep the easy runs actually easy.",
+        "Volume creeps up. Recovery matters more than any single workout — protect your sleep and easy days.",
+        "Deep in the build. If anything hurts, back off — better to lose a session than a month.",
       ],
       peak: [
-        "Race-specific pace enters the picture. Workouts start to mimic race demands — this is where fitness gets sharpened.",
-        "Long run pace pushes toward marathon effort in the middle miles. Practice fueling and hydration like it's race day.",
-        "Peak intensity week. Sessions are hard but shorter — the point is quality, not accumulation. Sleep is your best supplement.",
-        "Race simulation. Test your race-day breakfast, kit, and pacing strategy on this week's long run.",
+        "Race-specific work sharpens the fitness you've built. Sessions get closer to race demands.",
+        "Practice fueling and hydration on the long run like it's race day.",
+        "Peak intensity. Sessions are hard but shorter — quality over accumulation. Sleep is your best supplement.",
+        "Dress rehearsal week. Test your race-day breakfast, kit, and pacing strategy.",
       ],
-      taper: [
-        "Taper begins. Volume drops 25-35%, intensity stays. Trust the process — the fitness is already banked.",
-        "Race week. Short, easy runs plus a few pickups to keep the legs alert. Don't try anything new. Eat, sleep, hydrate.",
-      ],
+      // Specific weekly events — override the phase-generic pool.
+      firstTempo:    "First quality workout week. The tempo run teaches your body to clear lactate faster — you'll feel it in your legs, but recover quickly.",
+      firstInterval: "Intervals enter the picture. These are short and fast — the goal is neuromuscular sharpness, not death. Warm up well.",
+      cutback:       "Cutback week. Volume drops 20-30% so your body can absorb the last few weeks of work. Don't skip the easy days.",
+      taperStart:    "Taper begins. Volume drops but intensity stays. Trust the process — the fitness is already banked.",
+      raceWeek:      "Race week. Short, easy runs plus a few pickups to keep the legs alert. Don't try anything new. Eat, sleep, hydrate.",
     };
 
-    // Pick a narrative for this week from the phase's rotation.
-    function coachNarrativeForWeek_(weekIdx, totalWeeks) {
+    // v34.1.1: pick a narrative using the week's actual metadata so the
+    // words match the sessions. weekMeta = { isFirstTempo, isFirstInterval,
+    // isCutback, isRaceWeek, isTaperStart } — set by generateCoachPlan_.
+    function coachNarrativeForWeek_(weekIdx, totalWeeks, weekMeta) {
+      const meta = weekMeta || {};
+      if (meta.isRaceWeek)      return COACH_NARRATIVES.raceWeek;
+      if (meta.isTaperStart)    return COACH_NARRATIVES.taperStart;
+      if (meta.isCutback)       return COACH_NARRATIVES.cutback;
+      if (meta.isFirstInterval) return COACH_NARRATIVES.firstInterval;
+      if (meta.isFirstTempo)    return COACH_NARRATIVES.firstTempo;
       const phase = coachPhaseForWeek_(weekIdx, totalWeeks);
       const pool = COACH_NARRATIVES[phase] || [];
       if (!pool.length) return '';
-      // Rotate through the pool based on position within the phase.
+      // Rotate through the pool based on position within the phase,
+      // skipping any weeks already consumed by special-case narratives.
       const phaseStart = phase === 'base' ? 0
                       : phase === 'build' ? Math.floor(totalWeeks * 0.30)
                       : phase === 'peak' ? Math.floor(totalWeeks * 0.65)
                       : Math.floor(totalWeeks * 0.90);
       const withinPhase = weekIdx - phaseStart;
-      return pool[Math.min(withinPhase, pool.length - 1)];
+      return pool[Math.min(Math.max(0, withinPhase), pool.length - 1)];
     }
 
     // Human label for a phase (used in weekly card header).
@@ -11284,10 +11298,17 @@
       const currentMi = Math.max(0, Number(state.currentMiles) || 0);
       const startLR = Math.max(2, Math.min(peakLR * 0.4, currentMi * 0.35));
 
+      // v34.1.1: two-pass generation. First pass computes sessions +
+      // long-run distance per week. Second pass detects "special" weeks
+      // (first tempo, first interval, cutback, taper start, race week)
+      // and picks narratives that actually match what happened. This
+      // fixes the earlier bug where the narrative pool was decoupled
+      // from the generated sessions.
       const weeks = [];
+      let priorLongMi = 0;
+      let seenTempo = false, seenInterval = false;
       for (let w = 0; w < totalWeeks; w++) {
         const phase = coachPhaseForWeek_(w, totalWeeks);
-        const narrative = coachNarrativeForWeek_(w, totalWeeks);
         // Long run scales linearly from startLR to peakLR over base+build,
         // holds through peak, drops sharply in taper.
         const progressPct = Math.min(1, w / Math.max(1, totalWeeks * 0.85));
@@ -11296,11 +11317,29 @@
           const taperWeek = w - Math.floor(totalWeeks * 0.90);
           longMi = Math.round(peakLR * (taperWeek === 0 ? 0.65 : 0.35) * 10) / 10;
         }
-        // Cutback week — every 4th build week drops 25%.
-        if (phase === 'build' && (w % 4 === 3)) longMi = Math.round(longMi * 0.75 * 10) / 10;
+        // Cutback week — every 4th build week drops 30% below the trend.
+        // Uses 0.70 (not 0.75) to guarantee it's meaningfully below the
+        // previous week and reads as a genuine step-down on the chart.
+        if (phase === 'build' && (w % 4 === 3)) longMi = Math.round(longMi * 0.70 * 10) / 10;
 
         const sessions = coachSessionsForWeek_(phase, daysPerWeek, longMi, targetKey, currentMi, w, totalWeeks);
-        weeks.push({ weekIdx: w, phase, narrative, sessions, longMi });
+
+        // Session-aware metadata for narrative selection.
+        const hasTempo    = sessions.some(s => s.kind === 'tempo' || s.kind === 'threshold');
+        const hasInterval = sessions.some(s => s.kind === 'interval');
+        const isFirstTempo    = hasTempo    && !seenTempo;
+        const isFirstInterval = hasInterval && !seenInterval;
+        if (hasTempo)    seenTempo = true;
+        if (hasInterval) seenInterval = true;
+        const isCutback    = w > 0 && longMi < priorLongMi;
+        const isTaperStart = phase === 'taper' && (w === 0 || weeks[w-1].phase !== 'taper');
+        const isRaceWeek   = phase === 'taper' && w === totalWeeks - 1;
+
+        const weekMeta = { isFirstTempo, isFirstInterval, isCutback, isTaperStart, isRaceWeek };
+        const narrative = coachNarrativeForWeek_(w, totalWeeks, weekMeta);
+
+        weeks.push({ weekIdx: w, phase, narrative, sessions, longMi, ...weekMeta });
+        priorLongMi = longMi;
       }
       return { paces, weeks, totalWeeks, daysPerWeek };
     }
