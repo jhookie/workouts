@@ -1910,7 +1910,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.1';
+    const APP_VERSION = 'v34.2.2';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -7597,32 +7597,38 @@
         ? [...state.dows].sort((a,b)=>a-b)
         : defaultDowsForRunPlanCount_(state.days);
 
-      // v34.2.1: pBuildWeek always appends the Long Run as the LAST
-      // element of wos[]. To honor the user's chosen long-run-day, put
-      // that day at the end of the dow list — long run (wos[last]) lines
-      // up with dowsOrdered[last]. Falls back to the last selected day
-      // when longRunDow is unset or was deselected. days[] is then sorted
-      // chronologically at the end so the plan viewer shows a normal week.
+      // v34.2.1 (fixed v34.2.2): map the Long Run to the user's chosen
+      // day regardless of its POSITION within the week's wos array.
+      // pBuildWeek doesn't always put LR at the end (5-day weeks have
+      // an Easy recovery run AFTER the LR). So we find the LR's index
+      // via wo.type === 'longrun' and reorder dows so that same index
+      // lands on the user's chosen day. Other sessions fill the
+      // remaining days in the order they were selected.
       const longRunDow = (state.longRunDow != null && dows.includes(state.longRunDow))
         ? state.longRunDow
         : dows[dows.length - 1];
-      const dowsOrdered = [...dows.filter(d => d !== longRunDow), longRunDow];
 
       const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
       const days = [];
       (state.weeks_data || []).forEach((wk, wi) => {
         const wos = wk.wos || [];
-        const slotCount = Math.min(wos.length, dowsOrdered.length);
-        // Anchor from the END so the LAST wo lands on the LAST dow
-        // (which is the long-run-day). For plans where wos.length <
-        // dowsOrdered.length, this drops the earliest dows rather than
-        // the latest ones — which is the sensible default (skip the
-        // Monday recovery run when we don't need it).
-        const startWo = 0;
-        const startDow = dowsOrdered.length - wos.length;
+        const slotCount = Math.min(wos.length, dows.length);
+        // Find where the LR sits in THIS week's wos (some weeks have no
+        // LR at all — e.g. race week — so guard for -1).
+        const lrIndex = wos.findIndex(w => w && w.type === 'longrun');
+        // Build a per-week dow order where dowsOrdered[lrIndex] ==
+        // longRunDow, and other slots pull from the remaining dows in
+        // their sorted (chronological) order.
+        const otherDows = dows.filter(d => d !== longRunDow);
+        const dowsOrdered = [];
+        let otherIdx = 0;
+        for (let i = 0; i < dows.length; i++) {
+          if (i === lrIndex) dowsOrdered.push(longRunDow);
+          else dowsOrdered.push(otherDows[otherIdx++]);
+        }
         for (let i = 0; i < slotCount; i++) {
-          const wo = wos[startWo + i];
-          const dowIdx = dowsOrdered[Math.max(0, startDow) + i];
+          const wo = wos[i];
+          const dowIdx = dowsOrdered[i];
           const d = new Date(anchor);
           d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
           days.push({
@@ -12050,9 +12056,9 @@
 
         <div class="card">
           <h2>TARGET RACE</h2>
-          <div class="plan-dist-grid" style="margin-bottom:20px">
+          <div class="plan-dist-grid" id="coachDistGrid" style="margin-bottom:20px">
             ${[['5k','🎯','5K','3.1 mi'],['10k','⭐','10K','6.2 mi'],['15k','💪','15K','9.3 mi'],['10mi','💪','10 Miles','Road race'],['hm','🏆','Half Marathon','13.1 mi'],['m','👑','Marathon','26.2 mi']].map(([k,ic,lb,sb])=>`
-              <button class="plan-dist-btn${coachDistSel===k?' sel':''}" onclick="coachDistSel='${k}';document.querySelectorAll('#coachForm .plan-dist-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel');coachRefreshWeeks()">
+              <button class="plan-dist-btn${coachDistSel===k?' sel':''}" onclick="coachDistSel='${k}';document.querySelectorAll('#coachDistGrid .plan-dist-btn').forEach(b=>b.classList.remove('sel'));this.classList.add('sel');coachRefreshWeeks()">
                 <div class="plan-dist-icon">${ic}</div>
                 <span class="plan-dist-name">${lb}</span>
                 <span class="plan-dist-sub">${sb}</span>
@@ -12388,7 +12394,35 @@
             style: 'margin-top: 8px; font-size: 13px; line-height: 1.5; color: var(--text); font-style: italic; padding: 8px 12px; background: var(--surface-2); border-radius: 8px;',
           }, wk.narrative) : null,
         ]);
-        wk.sessions.forEach(sess => {
+        // v34.2.2: pair each session with the day it'll land on so users
+        // can see at a glance whether the long run is on their picked day.
+        // The mapping mirrors what convertCoachPlanToTrainingPlan_ does:
+        // long run on chosen day (default = last selected), others fill
+        // remaining dows in order. Sort the pairs chronologically for
+        // display so the week reads Mon → Sun.
+        const COACH_DOW_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        const dowsSorted = (Array.isArray(state.dows) && state.dows.length)
+          ? [...state.dows].sort((a,b)=>a-b)
+          : (state.days === 3 ? [1,3,5]
+             : state.days === 4 ? [1,3,4,5]
+             : state.days === 5 ? [0,2,3,4,5]
+             : state.days === 6 ? [0,1,3,4,5,6] : [1,3,5]);
+        const lrDow = (state.longRunDow != null && dowsSorted.includes(state.longRunDow))
+          ? state.longRunDow
+          : dowsSorted[dowsSorted.length - 1];
+        const otherDows = dowsSorted.filter(d => d !== lrDow);
+        const dowsOrdered = [];
+        let otherIdx = 0;
+        for (let i = 0; i < dowsSorted.length; i++) {
+          if (i === 0) dowsOrdered.push(lrDow); // Coach: LR at index 0
+          else dowsOrdered.push(otherDows[otherIdx++]);
+        }
+        const sessionDowPairs = wk.sessions.map((s, i) => ({
+          sess: s,
+          dow:  dowsOrdered[i],
+        })).sort((a, b) => a.dow - b.dow);
+
+        sessionDowPairs.forEach(({ sess, dow }) => {
           const durMin = coachEstimateDuration_(sess, plan.paces);
           const overTarget = durMin > state.sessLen;
           // v34.1.1: color-code each session by its pace zone so users
@@ -12400,6 +12434,7 @@
           }, [
             el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' }, [
               el('div', { style: 'font-weight: 700; font-size: 14px;' }, [
+                el('span', { style: 'color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 8px;' }, COACH_DOW_LABELS[dow] || ''),
                 sess.name,
                 el('span', { style: `margin-left: 8px; font-size: 10px; color: ${zone.color}; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;` }, zone.label),
                 overTarget ? el('span', { title: `${durMin} min > ${state.sessLen} min target`, style: 'margin-left: 6px; color: var(--danger, #D93A2B); font-size: 12px;' }, `⚠️ ~${durMin} min`) : null,
