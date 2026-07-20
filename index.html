@@ -1910,7 +1910,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2';
+    const APP_VERSION = 'v34.2.1';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -7597,14 +7597,32 @@
         ? [...state.dows].sort((a,b)=>a-b)
         : defaultDowsForRunPlanCount_(state.days);
 
+      // v34.2.1: pBuildWeek always appends the Long Run as the LAST
+      // element of wos[]. To honor the user's chosen long-run-day, put
+      // that day at the end of the dow list — long run (wos[last]) lines
+      // up with dowsOrdered[last]. Falls back to the last selected day
+      // when longRunDow is unset or was deselected. days[] is then sorted
+      // chronologically at the end so the plan viewer shows a normal week.
+      const longRunDow = (state.longRunDow != null && dows.includes(state.longRunDow))
+        ? state.longRunDow
+        : dows[dows.length - 1];
+      const dowsOrdered = [...dows.filter(d => d !== longRunDow), longRunDow];
+
       const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
       const days = [];
       (state.weeks_data || []).forEach((wk, wi) => {
         const wos = wk.wos || [];
-        const slotCount = Math.min(wos.length, dows.length);
+        const slotCount = Math.min(wos.length, dowsOrdered.length);
+        // Anchor from the END so the LAST wo lands on the LAST dow
+        // (which is the long-run-day). For plans where wos.length <
+        // dowsOrdered.length, this drops the earliest dows rather than
+        // the latest ones — which is the sensible default (skip the
+        // Monday recovery run when we don't need it).
+        const startWo = 0;
+        const startDow = dowsOrdered.length - wos.length;
         for (let i = 0; i < slotCount; i++) {
-          const wo = wos[i];
-          const dowIdx = dows[i];
+          const wo = wos[startWo + i];
+          const dowIdx = dowsOrdered[Math.max(0, startDow) + i];
           const d = new Date(anchor);
           d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
           days.push({
@@ -7622,6 +7640,9 @@
           });
         }
       });
+      // Sort chronologically so the plan reads week-by-week even when
+      // long-run-day sits earlier than the last dow selected.
+      days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
       const startISO = anchor.toISOString().slice(0, 10);
       const endISO = days.length ? days[days.length - 1].date : startISO;
       return {
@@ -10449,6 +10470,13 @@
             </div>
           </div>
           <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
+              <label>Long run on</label>
+              <div class="muted" id="pLongDowNote" style="font-size:11px">Pick your training days above first.</div>
+            </div>
+            <div class="plan-dow-row" id="pLongDowRow"></div>
+          </div>
+          <div class="plan-slider-row">
             <label class="plan-checkbox-row" for="pRWRToggle">
               <input type="checkbox" id="pRWRToggle" onchange="pRWRToggleChanged()">
               <span class="plan-checkbox-body">
@@ -10528,6 +10556,45 @@
       // Restore day-of-week selections into module state (used by planGenerate)
       window.planSelectedDows = Array.isArray(savedState.dows) ? savedState.dows.slice() : [];
 
+      // v34.2.1: long-run-day picker for Quick Planner. Mirrors Coach's
+      // Edition. Populates from the selected DOWs, defaults to the last
+      // one, updates when DOWs change.
+      const P_DOW_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      window.planLongRunDow = (typeof savedState.longRunDow === 'number') ? savedState.longRunDow : null;
+      window.updatePLongDowPicker = function() {
+        const row = document.getElementById('pLongDowRow');
+        const note = document.getElementById('pLongDowNote');
+        if (!row) return;
+        row.innerHTML = '';
+        const chosen = (window.planSelectedDows || []).slice().sort((a,b)=>a-b);
+        if (!chosen.length) {
+          if (note) {
+            note.textContent = 'Auto-assign: Sat (or last day if you customize).';
+            note.style.color = 'var(--muted)';
+          }
+          return;
+        }
+        if (window.planLongRunDow == null || !chosen.includes(window.planLongRunDow)) {
+          window.planLongRunDow = chosen[chosen.length - 1];
+        }
+        chosen.forEach(dowIdx => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'plan-dow-btn' + (window.planLongRunDow === dowIdx ? ' sel' : '');
+          btn.textContent = P_DOW_NAMES[dowIdx];
+          btn.onclick = () => {
+            window.planLongRunDow = dowIdx;
+            window.updatePLongDowPicker();
+          };
+          row.appendChild(btn);
+        });
+        if (note) {
+          note.textContent = `Long run on ${P_DOW_NAMES[window.planLongRunDow]}.`;
+          note.style.color = 'var(--muted)';
+        }
+      };
+      window.updatePLongDowPicker();
+
       // Restore walk-break checkbox + ratio if the user had it enabled
       if (savedState.runWalk) {
         const cb = document.getElementById('pRWRToggle');
@@ -10553,6 +10620,8 @@
     }
 
     // Toggle a day-of-week checkbox in the Run Planner form. Mon=0..Sun=6.
+    // v34.2.1: also refreshes the long-run-day picker in case the user
+    // deselected the day they'd chosen for it.
     function planToggleDow(i) {
       if (!Array.isArray(window.planSelectedDows)) window.planSelectedDows = [];
       const arr = window.planSelectedDows;
@@ -10563,6 +10632,8 @@
       if (btn) btn.classList.toggle('sel');
       // v33.2 (Q1): refresh the live day-count feedback.
       if (typeof window.updatePDowsNote === 'function') window.updatePDowsNote();
+      // v34.2.1: refresh the long-run-day picker.
+      if (typeof window.updatePLongDowPicker === 'function') window.updatePLongDowPicker();
     }
 
     function planGenerate() {
@@ -10597,9 +10668,13 @@
         totalMi += wk.total;
       }
       const dows = Array.isArray(window.planSelectedDows) ? window.planSelectedDows.slice().sort() : [];
+      // v34.2.1: capture long-run-day for slotting in convertRunPlanToTrainingPlan_.
+      const longRunDow = (typeof window.planLongRunDow === 'number' && dows.includes(window.planLongRunDow))
+        ? window.planLongRunDow
+        : (dows.length ? dows[dows.length - 1] : null);
       const runWalk = !!document.getElementById('pRWRToggle')?.checked;
       const runWalkRatio = runWalk ? (document.getElementById('pRWRRatio')?.value || '4:1') : null;
-      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, runWalk, runWalkRatio, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
+      const state = { dist:planDistSel, level:planLevelSel, miles, days, weeks, dows, longRunDow, runWalk, runWalkRatio, raceDist, raceTime, paces, peakLR, weeks_data:weeksData, totalMi:Math.round(totalMi) };
       try { localStorage.setItem('runPlanState_v1', JSON.stringify(state)); } catch(e) {}
       pShowOutput(state);
     }
@@ -12060,6 +12135,13 @@
           </div>
           <div class="plan-slider-row">
             <div class="plan-slider-hdr">
+              <label>Long run on</label>
+              <div class="muted" id="coachLongDowNote" style="font-size:11px">Pick your selected days first.</div>
+            </div>
+            <div class="plan-dow-row" id="coachLongDowRow"></div>
+          </div>
+          <div class="plan-slider-row">
+            <div class="plan-slider-hdr">
               <label>Session length target</label>
               <div class="plan-slider-val" id="coachSessLenVal">${saved.sessLen||60} <span>min</span></div>
             </div>
@@ -12143,6 +12225,48 @@
         }
       };
       window.updateCoachDowNote();
+
+      // v34.2.1: long-run-day picker. Populates with buttons for each
+      // selected DOW. Highlights the current pick (default: last selected
+      // day, usually Saturday). Tap to change. Empty state prompts user
+      // to pick their training days first.
+      const COACH_DOW_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      window.coachLongRunDow = (typeof saved.longRunDow === 'number') ? saved.longRunDow : null;
+      window.updateCoachLongDowPicker = function() {
+        const row = document.getElementById('coachLongDowRow');
+        const note = document.getElementById('coachLongDowNote');
+        if (!row) return;
+        row.innerHTML = '';
+        const chosen = (window.coachSelectedDows || []).slice().sort((a,b)=>a-b);
+        if (!chosen.length) {
+          if (note) {
+            note.textContent = 'We\'ll put it on the last day of your week.';
+            note.style.color = 'var(--muted)';
+          }
+          return;
+        }
+        // Default to the last selected day if current pick isn't in the
+        // chosen set (e.g. user deselected the day they'd chosen).
+        if (window.coachLongRunDow == null || !chosen.includes(window.coachLongRunDow)) {
+          window.coachLongRunDow = chosen[chosen.length - 1];
+        }
+        chosen.forEach(dowIdx => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'plan-dow-btn' + (window.coachLongRunDow === dowIdx ? ' sel' : '');
+          btn.textContent = COACH_DOW_NAMES[dowIdx];
+          btn.onclick = () => {
+            window.coachLongRunDow = dowIdx;
+            window.updateCoachLongDowPicker();
+          };
+          row.appendChild(btn);
+        });
+        if (note) {
+          note.textContent = `Long run on ${COACH_DOW_NAMES[window.coachLongRunDow]}. Other sessions fill the rest.`;
+          note.style.color = 'var(--muted)';
+        }
+      };
+      window.updateCoachLongDowPicker();
     }
 
     window.coachToggleDow = function(i) {
@@ -12153,6 +12277,9 @@
       const btn = document.querySelector(`.plan-dow-btn[data-coachdow="${i}"]`);
       if (btn) btn.classList.toggle('sel');
       if (typeof window.updateCoachDowNote === 'function') window.updateCoachDowNote();
+      // v34.2.1: refresh the long-run-day picker so it reflects the
+      // updated DOW selection.
+      if (typeof window.updateCoachLongDowPicker === 'function') window.updateCoachLongDowPicker();
     };
 
     window.coachPlanGenerate = function() {
@@ -12176,9 +12303,15 @@
       const sessLen  = Number(document.getElementById('coachSessLen').value) || 60;
       const injury   = (document.getElementById('coachInjury').value || '').trim();
 
+      // v34.2.1: capture the long-run-day. If the user never picked one
+      // explicitly, default to the last selected DOW (matches the picker's
+      // default behavior).
+      const longRunDow = (typeof window.coachLongRunDow === 'number' && chosenDows.includes(window.coachLongRunDow))
+        ? window.coachLongRunDow
+        : (chosenDows.length ? [...chosenDows].sort((a,b)=>a-b).slice(-1)[0] : null);
       const state = {
         dist: coachDistSel, level: coachLevelSel, currentMiles,
-        days, weeks, dows: chosenDows,
+        days, weeks, dows: chosenDows, longRunDow,
         raceDate, raceDist, raceTime, sessLen, injury,
       };
       try { localStorage.setItem('coachPlanState_v1', JSON.stringify(state)); } catch(e) {}
@@ -12333,12 +12466,22 @@
         : (defaults[state.days] || [1, 3, 5]);
       const dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
+      // v34.2.1: reorder the DOW → session mapping so the long run lands
+      // on the user's chosen day. Default: last selected day (usually
+      // Saturday). Other sessions fill the remaining days in order. The
+      // generator always puts the long run at sessions[0], so we can just
+      // reorder `dows` — place the long-run day first, keep the rest.
+      const longRunDow = (state.longRunDow != null && dows.includes(state.longRunDow))
+        ? state.longRunDow
+        : dows[dows.length - 1];
+      const dowsOrdered = [longRunDow, ...dows.filter(d => d !== longRunDow)];
+
       const days = [];
       plan.weeks.forEach((wk, wi) => {
-        const slotCount = Math.min(wk.sessions.length, dows.length);
+        const slotCount = Math.min(wk.sessions.length, dowsOrdered.length);
         for (let i = 0; i < slotCount; i++) {
           const sess = wk.sessions[i];
-          const dowIdx = dows[i];
+          const dowIdx = dowsOrdered[i];
           const d = new Date(anchor);
           d.setDate(anchor.getDate() + (wi * 7) + dowIdx);
           days.push({
@@ -12358,6 +12501,10 @@
           });
         }
       });
+      // v34.2.1: sort by date so the plan viewer iterates chronologically
+      // even when the long run got slotted to a day earlier in the DOW
+      // reordering. end_date needs the actual latest date, not last-slotted.
+      days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
       const startISO = anchor.toISOString().slice(0, 10);
       const endISO = days.length ? days[days.length - 1].date : startISO;
       return {
