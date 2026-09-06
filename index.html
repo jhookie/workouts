@@ -1911,7 +1911,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.6';
+    const APP_VERSION = 'v34.2.7';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -6357,6 +6357,11 @@ TYPE html>
         // v34.1: sets[] holds all sets; r1..r4 caps at 4. Prefer the array.
         const setReps = extractExerciseReps_(ex);
         const setSum = setReps.reduce((s, v) => s + (v || 0), 0);
+        // v34.2.6: show max set weight (same fix as exercise progression view).
+        const _sExSets = Array.isArray(ex.sets) ? ex.sets.filter(s => s.reps != null) : [];
+        const _sExWts = _sExSets.map(s => parseWeightNumber_(s.weight)).filter(v => v != null);
+        const _sExMaxW = _sExWts.length ? Math.max(..._sExWts) : null;
+        const _sDisplayW = _sExMaxW != null ? String(_sExMaxW) : (ex.weight === '' || ex.weight == null ? '—' : String(ex.weight));
         list.appendChild(el('div', {
           class: 'card session-ex progression-tap',
           onclick: () => {
@@ -6372,7 +6377,7 @@ TYPE html>
           el('div', { class: 'session-ex-stats' }, [
             el('div', { class: 'session-stat' }, [
               el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Weight'),
-              el('div', { class: 'session-stat-val' }, ex.weight === '' || ex.weight == null ? '—' : String(ex.weight)),
+              el('div', { class: 'session-stat-val' }, _sDisplayW),
             ]),
             el('div', { class: 'session-stat' }, [
               el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Reps'),
