@@ -1,4 +1,5 @@
-<!DOCTYPE html>
+<!DOC
+TYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -1910,7 +1911,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.4';
+    const APP_VERSION = 'v34.2.5';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -1936,6 +1937,16 @@
       } catch (e) {}
       applyTheme_(mode);
     }
+
+    // v34.2.5: RPE optional — read/write from localStorage
+    function getRpeEnabled_() {
+      try { const v = localStorage.getItem('loggbok_rpe_enabled'); return v === null ? true : v === 'true'; }
+      catch { return true; }
+    }
+    function setRpeEnabled_(val) {
+      try { localStorage.setItem('loggbok_rpe_enabled', String(val)); } catch {}
+    }
+
     // Pre-paint: apply the saved theme before any UI renders so the
     // first frame matches user preference (no light-mode flash).
     applyTheme_(getSavedTheme_());
@@ -8530,7 +8541,7 @@
             type: 'text', inputmode: 'text', autocapitalize: 'characters',
             placeholder: set.target_weight != null ? String(set.target_weight) : 'BW',
             value: set.target_weight != null ? String(set.target_weight) : '',
-            style: 'width: 70px;',
+            style: 'width: 60px;',
           });
           const repsInp = el('input', {
             type: 'text', inputmode: 'numeric',
@@ -8541,7 +8552,7 @@
           const rpeInp = el('input', {
             type: 'text', inputmode: 'decimal',
             placeholder: '—',
-            style: 'width: 40px;',
+            style: 'width: 55px;',
           });
           setInputs.push({ weightInp, repsInp, rpeInp, target: set });
 
@@ -8559,10 +8570,10 @@
                 el('label', {}, 'reps'),
                 repsInp,
               ]),
-              el('div', { class: 'plan-log-field' }, [
+              getRpeEnabled_() ? el('div', { class: 'plan-log-field' }, [
                 el('label', {}, 'RPE'),
                 rpeInp,
-              ]),
+              ]) : null,
             ]),
           ]));
 
@@ -8790,7 +8801,7 @@
             type: 'text', inputmode: 'text', autocapitalize: 'characters',
             placeholder: 'BW',
             value: (set.weight != null && set.weight !== '') ? String(set.weight) : '',
-            style: 'width: 70px;',
+            style: 'width: 60px;',
           });
           const repsInp = el('input', {
             type: 'text', inputmode: 'numeric',
@@ -8802,7 +8813,7 @@
             type: 'text', inputmode: 'decimal',
             placeholder: '—',
             value: (set.rpe != null) ? String(set.rpe) : '',
-            style: 'width: 40px;',
+            style: 'width: 55px;',
           });
           setInputs.push({ weightInp, repsInp, rpeInp, target: set });
 
@@ -8814,7 +8825,7 @@
             el('div', { class: 'plan-log-inputs' }, [
               el('div', { class: 'plan-log-field' }, [el('label', {}, 'lb'), weightInp]),
               el('div', { class: 'plan-log-field' }, [el('label', {}, 'reps'), repsInp]),
-              el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]),
+              getRpeEnabled_() ? el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]) : null,
             ]),
           ]));
         });
@@ -9018,7 +9029,7 @@
           el('div', { class: 'plan-log-inputs' }, [
             el('div', { class: 'plan-log-field' }, [el('label', {}, 'lb'), weightInp]),
             el('div', { class: 'plan-log-field' }, [el('label', {}, 'reps'), repsInp]),
-            el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]),
+            getRpeEnabled_() ? el('div', { class: 'plan-log-field' }, [el('label', {}, 'RPE'), rpeInp]) : null,
             removeBtn,
           ]),
         ]);
@@ -10196,6 +10207,28 @@
         });
         appearanceCard.appendChild(themeRow);
         app.appendChild(appearanceCard);
+      }
+
+      // v34.2.5: RPE toggle card
+      {
+        const rpeOn = getRpeEnabled_();
+        const rpeToggleBtn = el('button', {
+          style: `width: auto; padding: 6px 16px; font-size: 13px; border-radius: 20px; border: 1.5px solid ${rpeOn ? 'var(--primary)' : 'var(--border)'}; background: ${rpeOn ? 'var(--primary)' : 'transparent'}; color: ${rpeOn ? '#fff' : 'var(--text)'};`,
+          onclick: () => {
+            const next = !getRpeEnabled_();
+            setRpeEnabled_(next);
+            toast(next ? 'RPE column enabled' : 'RPE column hidden');
+            render('profile');
+          },
+        }, rpeOn ? 'RPE On' : 'RPE Off');
+        app.appendChild(el('div', { class: 'card' }, [
+          el('div', { style: 'font-weight: 600; margin-bottom: 4px;' }, 'Logging'),
+          el('div', { class: 'muted', style: 'font-size: 13px; margin-bottom: 12px;' }, 'Show or hide the RPE column in lift logging.'),
+          el('div', { style: 'display: flex; align-items: center; justify-content: space-between;' }, [
+            el('span', { style: 'font-size: 14px;' }, 'RPE column'),
+            rpeToggleBtn,
+          ]),
+        ]));
       }
 
       // Account / sign out
