@@ -1910,7 +1910,7 @@
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.2';
+    const APP_VERSION = 'v34.2.4';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -3165,7 +3165,7 @@
     // safe to ship in the frontend. The client_secret lives only inside the
     // strava-oauth Edge Function as a Supabase secret.
     // Replace 0 with your numeric Strava app Client ID before deploying.
-    const STRAVA_CLIENT_ID = 0; // <<< REPLACE WITH YOUR STRAVA CLIENT ID
+    const STRAVA_CLIENT_ID = 135335; // Loggbok Strava app
 
     function stravaConfigured() { return STRAVA_CLIENT_ID && Number(STRAVA_CLIENT_ID) > 0; }
 
@@ -4828,7 +4828,7 @@
                 const isActive = (i + 1) <= prescribedSets;
                 const inpAttrs = {
                   class: 'inp-r' + (i + 1) + (isActive ? '' : ' inp-disabled'),
-                  type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+                  type: 'text', inputmode: 'numeric',
                   placeholder: isActive ? '—' : '',
                   value: isActive ? (ex['r' + (i + 1)] === '' ? '' : String(ex['r' + (i + 1)] || '')) : '',
                 };
@@ -4973,9 +4973,9 @@
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
-            el('input', { id: 'runMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+            el('input', { id: 'runMin', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '999' }),
             el('div', { class: 'sep' }, ':'),
-            el('input', { id: 'runSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+            el('input', { id: 'runSec', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '59' }),
           ]),
           el('div', { class: 'time-sub' }, [
             el('div', {}, 'min'),
@@ -5027,9 +5027,9 @@
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
-            el('input', { id: 'walkMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+            el('input', { id: 'walkMin', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '999' }),
             el('div', { class: 'sep' }, ':'),
-            el('input', { id: 'walkSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+            el('input', { id: 'walkSec', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '59' }),
           ]),
           el('div', { class: 'time-sub' }, [
             el('div', {}, 'min'),
@@ -5097,9 +5097,9 @@
       card.appendChild(el('div', { class: 'field' }, [
         el('label', {}, 'Time — optional'),
         el('div', { class: 'time-row' }, [
-          el('input', { id: 'actMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '999' }),
+          el('input', { id: 'actMin', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '999' }),
           el('div', { class: 'sep' }, ':'),
-          el('input', { id: 'actSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '00', min: '0', max: '59' }),
+          el('input', { id: 'actSec', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '59' }),
         ]),
         el('div', { class: 'time-sub' }, [
           el('div', {}, 'min'),
@@ -8262,6 +8262,7 @@
             weight:    ex.weight != null && ex.weight !== '' ? ex.weight : null,
             totalReps: totalReps || null,
             reps,
+            sets:      Array.isArray(ex.sets) ? ex.sets.filter(s => s.reps != null) : [],
             date:      sess.date,
             day:       sess.day,
           });
@@ -8456,11 +8457,17 @@
             ? new Date(prev.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
             : '';
           const parts = [];
-          if (prev.weight != null && prev.weight !== '') {
-            parts.push(String(prev.weight) + (Number.isFinite(Number(prev.weight)) ? ' lb' : ''));
+          const _perSets = (prev.sets || []).filter(s => s.reps != null);
+          const _weightsVary = _perSets.length > 1 && _perSets.some(s => String(s.weight) !== String(_perSets[0].weight));
+          if (_weightsVary) {
+            parts.push(_perSets.map(s => `${s.weight != null ? s.weight : '?'}×${s.reps}`).join(', '));
+          } else {
+            if (prev.weight != null && prev.weight !== '') {
+              parts.push(String(prev.weight) + (Number.isFinite(Number(prev.weight)) ? ' lb' : ''));
+            }
+            if (prev.reps && prev.reps.length) parts.push(prev.reps.join(' / ') + ' reps');
+            else if (prev.totalReps) parts.push(prev.totalReps + ' reps');
           }
-          if (prev.reps && prev.reps.length) parts.push(prev.reps.join(' / ') + ' reps');
-          else if (prev.totalReps) parts.push(prev.totalReps + ' reps');
           exCard.appendChild(el('div', {
             style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; margin: -4px 0 12px; background: color-mix(in srgb, var(--primary) 6%, var(--surface-2)); border-radius: 8px; border-left: 3px solid var(--primary);',
           }, [
@@ -8526,15 +8533,14 @@
             style: 'width: 70px;',
           });
           const repsInp = el('input', {
-            type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+            type: 'text', inputmode: 'numeric',
             placeholder: parsePlanRepDefault_(set.target_reps),
             value: parsePlanRepDefault_(set.target_reps),
             style: 'width: 50px;',
           });
           const rpeInp = el('input', {
-            type: 'number', step: '0.5', inputmode: 'decimal',
+            type: 'text', inputmode: 'decimal',
             placeholder: '—',
-            min: '1', max: '10',
             style: 'width: 40px;',
           });
           setInputs.push({ weightInp, repsInp, rpeInp, target: set });
@@ -8787,16 +8793,15 @@
             style: 'width: 70px;',
           });
           const repsInp = el('input', {
-            type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+            type: 'text', inputmode: 'numeric',
             placeholder: '—',
             value: (set.reps != null && set.reps !== '') ? String(set.reps) : '',
             style: 'width: 50px;',
           });
           const rpeInp = el('input', {
-            type: 'number', step: '0.5', inputmode: 'decimal',
+            type: 'text', inputmode: 'decimal',
             placeholder: '—',
             value: (set.rpe != null) ? String(set.rpe) : '',
-            min: '1', max: '10',
             style: 'width: 40px;',
           });
           setInputs.push({ weightInp, repsInp, rpeInp, target: set });
@@ -8985,14 +8990,14 @@
           style: 'width: 70px;',
         });
         const repsInp = el('input', {
-          type: 'number', inputmode: 'numeric', pattern: '[0-9]*',
+          type: 'text', inputmode: 'numeric',
           placeholder: '—',
           value: (prefill && prefill.reps) || '',
           style: 'width: 50px;',
         });
         const rpeInp = el('input', {
-          type: 'number', step: '0.5', inputmode: 'decimal',
-          placeholder: '—', min: '1', max: '10',
+          type: 'text', inputmode: 'decimal',
+          placeholder: '—',
           style: 'width: 40px;',
         });
         const setNumEl = el('div', { style: 'font-weight: 600; font-size: 13px;' }, `Set ${setNum}`);
@@ -9281,9 +9286,9 @@
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
-            el('input', { id: 'reMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+            el('input', { id: 'reMin', type: 'text', inputmode: 'numeric', min: '0', max: '999', value: initMin }),
             el('div', { class: 'sep' }, ':'),
-            el('input', { id: 'reSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+            el('input', { id: 'reSec', type: 'text', inputmode: 'numeric', min: '0', max: '59', value: initSec }),
           ]),
           el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
         ]),
@@ -9343,9 +9348,9 @@
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
-            el('input', { id: 'weMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+            el('input', { id: 'weMin', type: 'text', inputmode: 'numeric', min: '0', max: '999', value: initMin }),
             el('div', { class: 'sep' }, ':'),
-            el('input', { id: 'weSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+            el('input', { id: 'weSec', type: 'text', inputmode: 'numeric', min: '0', max: '59', value: initSec }),
           ]),
           el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
         ]),
@@ -9401,9 +9406,9 @@
       card.appendChild(el('div', { class: 'field' }, [
         el('label', {}, 'Time'),
         el('div', { class: 'time-row' }, [
-          el('input', { id: 'aeMin', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '999', value: initMin }),
+          el('input', { id: 'aeMin', type: 'text', inputmode: 'numeric', min: '0', max: '999', value: initMin }),
           el('div', { class: 'sep' }, ':'),
-          el('input', { id: 'aeSec', type: 'number', inputmode: 'numeric', pattern: '[0-9]*', min: '0', max: '59', value: initSec }),
+          el('input', { id: 'aeSec', type: 'text', inputmode: 'numeric', min: '0', max: '59', value: initSec }),
         ]),
         el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
       ]));
