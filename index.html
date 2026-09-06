@@ -1911,7 +1911,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.5';
+    const APP_VERSION = 'v34.2.6';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -6417,12 +6417,17 @@ TYPE html>
         // v34.1: extract from sets[] when present so 5+ set exercises
         // (5/3/1 back-off, myoreps, drop sets) count their real total.
         const setReps = extractExerciseReps_(match);
+        // v34.2.6: use true max weight from sets[] (per-set weights for
+        // 5/3/1 and similar) instead of the exercise-level weight field.
+        const _exSets = Array.isArray(match.sets) ? match.sets.filter(s => s.reps != null) : [];
+        const _exSetWts = _exSets.map(s => parseWeightNumber_(s.weight)).filter(v => v != null);
+        const _exMaxW = _exSetWts.length ? Math.max(..._exSetWts) : null;
         out.push({
           date:     s.date,
           block:    s.block_name,
           week:     s.week,
           day:      s.day,
-          weight:   match.weight,
+          weight:   _exMaxW != null ? _exMaxW : match.weight,
           setReps:  setReps,
           totalReps: setReps.reduce((a, b) => a + (b || 0), 0),
           notes:    match.notes || '',
