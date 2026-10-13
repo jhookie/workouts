@@ -1911,7 +1911,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.3';
+    const APP_VERSION = 'v34.3.1';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -7034,16 +7034,28 @@ TYPE html>
               throw new Error(`CSV parse error (row ${first.row}): ${first.message}`);
             }
             const parseOut = programStructureFromRows_(parsed.data, dayTitlesInp.value.trim());
+            // v34.3.1 debug: log everything so we can see what the parser
+            // actually produced. Remove once the issue is nailed.
+            console.log('[v34.3.1 import]', {
+              rows: parsed.data.length,
+              headers: Object.keys(parsed.data[0] || {}),
+              detectedPlanType: parseOut.planType,
+              structurePlanType: parseOut.structure?.plan_type,
+              dayLetters: parseOut.structure?.day_letters,
+              weeksTotal: parseOut.structure?.weeks_total,
+              firstDay: Object.values(parseOut.structure?.weeks?.[0]?.days || {})[0],
+            });
             const structure = parseOut.structure;
             const planType  = parseOut.planType;
             status.textContent = 'Uploading…';
             const result = await sbUpsertProgramFromCsv(name, structure, notesInp.value.trim() || null, planType);
-            // v34.3: count items honestly — exercises for lifts, sessions for runs.
             const itemCount = structure.weeks.reduce((sum, w) =>
               sum + Object.values(w.days || {}).reduce((s, arr) => s + arr.length, 0), 0);
             const noun = planType === 'run' ? 'sessions' : 'exercises';
-            const typeLabel = planType === 'run' ? 'run' : 'lift';
-            toast(`${result.updated ? 'Updated' : 'Imported'} "${name}" (${typeLabel}) — ${structure.weeks_total} weeks · ${itemCount} ${noun}`);
+            const typeLabel = planType === 'run' ? 'RUN' : 'LIFT';
+            // v34.3.1: toast includes the detected type explicitly so users
+            // can see without opening dev tools whether detection worked.
+            toast(`${result.updated ? 'Updated' : 'Imported'} as ${typeLabel} — ${structure.weeks_total} weeks · ${itemCount} ${noun}`);
             setTimeout(() => render('programs'), 700);
           } catch (e) {
             status.textContent = 'Failed: ' + (e.message || String(e));
