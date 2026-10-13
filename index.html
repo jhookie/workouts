@@ -1911,7 +1911,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.2.7';
+    const APP_VERSION = 'v34.3';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -2058,25 +2058,54 @@ TYPE html>
       }, 100);
     }
 
-    // Build the programs.structure JSONB from parsed CSV rows. Mirrors the
-    // Python import_program.py parse_csv logic so both paths produce
-    // identical shapes. Throws with a user-friendly message on bad input.
+    // v34.3: Smart Program CSV importer. Builds the programs.structure
+    // JSONB from parsed CSV rows. Auto-detects run vs lift from column
+    // content, aggregates multi-row lifts (5/3/1 Set # 1/2/3) into proper
+    // sets[] arrays, aggregates run warm-up/main/cool-down rows into one
+    // session per day with pace + treadmill mph preserved.
+    //
+    // Returns { structure, planType } so sbUpsertProgramFromCsv can set
+    // plan_type correctly on the DB row.
     const PROGRAM_HEADER_ALIASES = {
-      block:       ['block', 'block name', 'block_name', 'phase'],
-      week:        ['week', 'wk'],
-      day:         ['day'],
-      exercise:    ['exercise', 'name', 'exercise name'],
-      category:    ['category', 'muscle', 'group'],
-      sets:        ['sets', 'num sets', '# sets'],
-      target_reps: ['target reps', 'target', 'reps', 'rep range'],
-      notes:       ['notes', 'exercise notes', 'comment'],
+      block:         ['block', 'block name', 'block_name', 'phase'],
+      cycle_wk:      ['cycle wk', 'cycle_wk', 'cycle week', 'cycleweek'],
+      week:          ['week', 'wk'],
+      day:           ['day'],
+      session:       ['session', 'workout', 'workout name'],
+      exercise:      ['exercise', 'name', 'exercise name'],
+      category:      ['category', 'muscle', 'muscle/goal', 'muscle goal', 'group'],
+      set_num:       ['set #', 'set#', 'set number', 'set_num'],
+      set_type:      ['set type', 'set_type', 'type'],
+      sets:          ['sets', 'num sets', '# sets'],
+      target_reps:   ['target reps', 'target', 'reps', 'rep range'],
+      percent:       ['percent', 'percent 1rm', '%', '%1rm', 'intensity'],
+      target_weight: ['target weight', 'target wt', 'weight'],
+      target_pace:   ['target pace', 'pace', 'pace target'],
+      target_mph:    ['treadmill mph', 'mph', 'tm mph', 'treadmill speed'],
+      rest:          ['rest', 'rest interval'],
+      notes:         ['notes', 'exercise notes', 'comment', 'description'],
     };
 
-    function programStructureFromRows_(rows, dayTitlesArg) {
+    // Infer the workout "kind" (easy/tempo/interval/long/race) from a
+    // session name — used in the run detail view to color-code and route
+    // appropriately. Keep the vocabulary generous since users name
+    // sessions however they like.
+    function inferRunKind_(sessionName) {
+      const s = String(sessionName || '').toLowerCase();
+      if (/\btempo\b/.test(s))                                    return 'tempo';
+      if (/\bthreshold\b|\bsub[- ]?t\b|\blactate\b/.test(s))      return 'threshold';
+      if (/\binterval\b|\brepeats?\b|\btrack\b|\bvo2\b/.test(s))  return 'interval';
+      if (/\blong\b|\blr\b/.test(s))                              return 'long';
+      if (/\brecovery\b/.test(s))                                 return 'easy';
+      if (/\brace\b|\btime trial\b|\btt\b/.test(s))               return 'race';
+      if (/\beasy\b|\brun\b/.test(s))                             return 'easy';
+      return 'easy';
+    }
+
+    function programStructureFromRows_(rows, dayTitlesArg, typeOverride) {
       if (!Array.isArray(rows) || !rows.length) throw new Error('CSV had no data rows.');
 
-      // Papa's header:true gives us row objects. Match aliases against the
-      // actual header names (case-insensitive).
+      // Match headers against aliases (case-insensitive).
       const headers = Object.keys(rows[0] || {});
       const headersLower = headers.map(h => h.toLowerCase().trim());
       const colMap = {};
@@ -2086,7 +2115,7 @@ TYPE html>
           if (i !== -1) { colMap[canon] = headers[i]; break; }
         }
       }
-      const missing = ['week', 'day', 'exercise'].filter(k => !colMap[k]);
+      const missing = ['week', 'day'].filter(k => !colMap[k]);
       if (missing.length) {
         throw new Error(`CSV missing required column(s): ${missing.join(', ')}. Headers found: ${headers.join(', ')}`);
       }
@@ -2098,38 +2127,76 @@ TYPE html>
       const numOrNone = (s) => {
         s = (s || '').trim();
         if (!s) return null;
-        const n = Number(s);
+        // Strip trailing % so "65%" becomes 65.
+        const stripped = s.replace(/%$/, '').trim();
+        const n = Number(stripped);
         return Number.isFinite(n) ? n : null;
       };
+      const trimOrNull = (s) => {
+        const t = (s || '').trim();
+        return t ? t : null;
+      };
 
-      const weeksMap = {}; // week → { block_name, days: { A: [...], ... } }
+      // Detect plan type from column presence + content. Manual override
+      // from the UI wins when provided. Rule:
+      //   - any non-empty Target Pace or Treadmill mph  → 'run'
+      //   - any non-empty Percent or Target Weight      → 'lift'
+      //   - fall back to 'lift' (preserves old behavior for legacy CSVs
+      //     that use the simple exercise/sets/target_reps shape)
+      let planType = typeOverride || null;
+      if (!planType) {
+        let hasRunContent = false, hasLiftContent = false;
+        for (const row of rows) {
+          if (!hasRunContent && (cell(row, 'target_pace') || cell(row, 'target_mph'))) hasRunContent = true;
+          if (!hasLiftContent && (cell(row, 'percent') || cell(row, 'target_weight'))) hasLiftContent = true;
+          if (hasRunContent && hasLiftContent) break;
+        }
+        planType = hasRunContent && !hasLiftContent ? 'run'
+                 : hasLiftContent ? 'lift'
+                 : 'lift';
+      }
+
+      // Day key preservation — keep original casing ("Day 1" / "A") rather
+      // than uppercasing to "DAY 1". Only normalize for grouping lookups.
+      const dayKeyOrig = {};
+      const weeksMap = {}; // week → { block_name, days: { <dayKey>: [...] } }
       const daysSeen = new Set();
       const weeksSeen = new Set();
 
+      // Pass 1: group rows by (week, day). For LIFT, we also need
+      // sub-grouping by exercise so we can aggregate 5/3/1 sets. For RUN,
+      // we group by day (each day usually has one session with 3 phases).
+      // We collect raw row references, then collapse in pass 2.
+      const groups = {}; // `${week}|${day}` → { week, dayKey, block, rawRows: [] }
       rows.forEach(row => {
         const week = numOrNone(cell(row, 'week'));
         if (week == null) return;
-        const day = cell(row, 'day').toUpperCase();
-        if (!day) return;
-        const exname = cell(row, 'exercise');
-        if (!exname) return;
+        const dayRaw = cell(row, 'day');
+        if (!dayRaw) return;
+        const dayKey = dayRaw.trim();                 // preserve case
+        const dayNorm = dayKey.toUpperCase();         // for de-dup
+        if (!dayKeyOrig[dayNorm]) dayKeyOrig[dayNorm] = dayKey;
         const block = cell(row, 'block') || null;
 
         weeksSeen.add(week);
-        daysSeen.add(day);
-        if (!weeksMap[week]) weeksMap[week] = { block_name: block, days: {} };
-        if (block && !weeksMap[week].block_name) weeksMap[week].block_name = block;
-        if (!weeksMap[week].days[day]) weeksMap[week].days[day] = [];
-        weeksMap[week].days[day].push({
-          name:        exname,
-          category:    cell(row, 'category') || null,
-          sets:        numOrNone(cell(row, 'sets')),
-          target_reps: cell(row, 'target_reps') || null,
-          notes:       cell(row, 'notes') || null,
-        });
+        daysSeen.add(dayNorm);
+        const k = week + '|' + dayNorm;
+        if (!groups[k]) groups[k] = { week, dayKey: dayKeyOrig[dayNorm], block, rawRows: [] };
+        if (block && !groups[k].block) groups[k].block = block;
+        groups[k].rawRows.push(row);
       });
 
-      if (!Object.keys(weeksMap).length) throw new Error('No usable rows found in the CSV. Check that Week, Day, and Exercise are filled in.');
+      if (!Object.keys(groups).length) throw new Error('No usable rows found in the CSV. Check that Week and Day are filled in.');
+
+      // Pass 2: collapse rawRows into day items based on planType.
+      Object.values(groups).forEach(g => {
+        const items = (planType === 'run')
+          ? aggregateRunDay_(g.rawRows, cell, trimOrNull)
+          : aggregateLiftDay_(g.rawRows, cell, numOrNone, trimOrNull);
+        if (!weeksMap[g.week]) weeksMap[g.week] = { block_name: g.block, days: {} };
+        if (g.block && !weeksMap[g.week].block_name) weeksMap[g.week].block_name = g.block;
+        weeksMap[g.week].days[g.dayKey] = items;
+      });
 
       const weeksSorted = [...weeksSeen].sort((a, b) => a - b);
       const dayTitles = {};
@@ -2147,27 +2214,142 @@ TYPE html>
         days: weeksMap[w].days,
       }));
 
+      const dayKeysOut = [...daysSeen].map(norm => dayKeyOrig[norm]).sort();
+
       return {
-        weeks_total: Math.max(...weeksSeen),
-        day_letters: [...daysSeen].sort(),
-        day_titles:  dayTitles,
-        weeks:       weeksOut,
+        structure: {
+          weeks_total: Math.max(...weeksSeen),
+          day_letters: dayKeysOut,
+          day_titles:  dayTitles,
+          plan_type:   planType,
+          weeks:       weeksOut,
+        },
+        planType,
       };
     }
 
-    // Upsert a program: update-if-same-name, else insert. Mirrors the
-    // Python script's behavior so re-importing with the same name updates.
-    async function sbUpsertProgramFromCsv(name, structure, notes) {
+    // Collapse a day's rows into aggregated exercise entries for a LIFT
+    // program. Multiple rows for the same exercise (5/3/1 Set # 1,2,3)
+    // become one exercise with sets[] array capturing per-set prescription.
+    // A single row with Set # > 1 is treated as a prototype — the lift
+    // logger (expandPlanExerciseSets_) will fan it out at render time.
+    function aggregateLiftDay_(rawRows, cell, numOrNone, trimOrNull) {
+      const perExercise = {}; // keyed by `${name}|${set_type}` so FSL Backoff doesn't merge with 5/3/1
+      const order = [];
+      rawRows.forEach(row => {
+        const name = cell(row, 'exercise');
+        if (!name) return;
+        const setType = cell(row, 'set_type') || '';
+        const groupKey = name + '|' + setType;
+        if (!(groupKey in perExercise)) {
+          perExercise[groupKey] = {
+            name,
+            muscle:   trimOrNull(cell(row, 'category')),
+            category: trimOrNull(cell(row, 'category')),
+            set_type: setType || null,
+            sets:     [],
+            notes:    trimOrNull(cell(row, 'notes')),
+          };
+          order.push(groupKey);
+        }
+        const setNumRaw = cell(row, 'set_num');
+        const setNum    = numOrNone(setNumRaw) || (perExercise[groupKey].sets.length + 1);
+        const setObj = {
+          set_num:        setNum,
+          set_type:       setType || null,
+          target_reps:    trimOrNull(cell(row, 'target_reps')),
+          percent:        numOrNone(cell(row, 'percent')),
+          target_weight:  trimOrNull(cell(row, 'target_weight')),
+          rest:           trimOrNull(cell(row, 'rest')),
+          notes:          trimOrNull(cell(row, 'notes')),
+        };
+        perExercise[groupKey].sets.push(setObj);
+      });
+      // Dedup consecutive duplicate exercise names across set_type groups
+      // isn't needed — order preserved by groupKey order.
+      // For single-row prototype (Set # = N, one row, no distinct per-set
+      // values): leave as-is; expandPlanExerciseSets_ fans it out.
+      return order.map(k => perExercise[k]);
+    }
+
+    // Collapse a day's rows into aggregated session entries for a RUN
+    // program. Rows typically come as Warm-up / Main set / Cool-down
+    // phases of a single session per day (per Jeff's CSV format). We
+    // merge them into one session object with warm_up / main_set /
+    // cool_down / target_pace_hr / workout_kind populated.
+    // If a day has multiple distinct Session values, we emit one session
+    // per Session value, each with its own aggregated phases.
+    function aggregateRunDay_(rawRows, cell, trimOrNull) {
+      const perSession = {}; // keyed by session name
+      const order = [];
+      rawRows.forEach(row => {
+        const sessionName = cell(row, 'session') || cell(row, 'exercise') || 'Run';
+        if (!(sessionName in perSession)) {
+          perSession[sessionName] = {
+            type:           'run',
+            name:           sessionName,
+            workout_kind:   inferRunKind_(sessionName),
+            target_pace_hr: null,
+            target_mph:     null,
+            warm_up:        null,
+            main_set:       null,
+            cool_down:      null,
+            notes:          null,
+            phases:         [],   // raw phases for the detail view
+          };
+          order.push(sessionName);
+        }
+        const sess = perSession[sessionName];
+        const phaseName = cell(row, 'exercise') || '';   // Warm-up / Main set / Cool-down
+        const targetReps = cell(row, 'target_reps');     // e.g. "6" (reps) or "3 min" (time)
+        const setNum     = cell(row, 'set_num');         // e.g. "6" for 6 × 3-min reps
+        const pace       = cell(row, 'target_pace');
+        const mph        = cell(row, 'target_mph');
+        const rest       = cell(row, 'rest');
+        const notes      = cell(row, 'notes');
+
+        // Compose a human-readable phase description.
+        const descBits = [];
+        if (setNum && Number(setNum) > 1) descBits.push(`${setNum} ×`);
+        if (targetReps) descBits.push(targetReps);
+        if (pace)       descBits.push(`@ ${pace}`);
+        else if (mph)   descBits.push(`@ ${mph}`);
+        if (rest)       descBits.push(`w/ ${rest} rest`);
+        const desc = descBits.join(' ');
+        const full = notes ? `${desc}${desc ? ' — ' : ''}${notes}` : desc;
+
+        const phase = { name: phaseName, text: full || null, pace, mph, target_reps: targetReps, set_num: setNum, rest, notes };
+        sess.phases.push(phase);
+
+        // Also populate top-level warm_up/main_set/cool_down for quick-glance.
+        const phaseLower = phaseName.toLowerCase();
+        if (phaseLower.includes('warm'))        sess.warm_up  = full || sess.warm_up;
+        else if (phaseLower.includes('cool'))   sess.cool_down = full || sess.cool_down;
+        else if (phaseLower.includes('main'))   sess.main_set = full || sess.main_set;
+        else if (!sess.main_set)                sess.main_set = full;
+
+        // Use the main set's pace/mph as the session's headline pace/mph.
+        if (!sess.target_pace_hr && pace && phaseLower.includes('main')) sess.target_pace_hr = pace;
+        if (!sess.target_mph     && mph  && phaseLower.includes('main')) sess.target_mph     = mph;
+      });
+      return order.map(k => perSession[k]);
+    }
+
+    // Upsert a program: update-if-same-name, else insert.
+    // v34.3: now takes planType and persists it to the plan_type column.
+    async function sbUpsertProgramFromCsv(name, structure, notes, planType) {
       const uid = currentUser.id;
       const { data: existing, error: findErr } = await _sb.from('programs')
         .select('id').eq('user_id', uid).eq('name', name).limit(1);
       if (findErr) throw new Error(findErr.message);
+      const type = planType || structure?.plan_type || 'lift';
 
       if (existing && existing.length) {
-        const patch = { structure };
+        const patch = { structure, plan_type: type };
         if (notes !== undefined && notes !== null) patch.notes = notes;
         const { error } = await _sb.from('programs').update(patch).eq('id', existing[0].id);
         if (error) throw new Error(error.message);
+        invalidateActiveProgramCache?.();
         return { id: existing[0].id, updated: true };
       }
       const { data, error } = await _sb.from('programs').insert({
@@ -2175,9 +2357,11 @@ TYPE html>
         name,
         notes: notes || null,
         active: false,
+        plan_type: type,
         structure,
       }).select('id').single();
       if (error) throw new Error(error.message);
+      invalidateActiveProgramCache?.();
       return { id: data.id, updated: false };
     }
 
@@ -6357,11 +6541,6 @@ TYPE html>
         // v34.1: sets[] holds all sets; r1..r4 caps at 4. Prefer the array.
         const setReps = extractExerciseReps_(ex);
         const setSum = setReps.reduce((s, v) => s + (v || 0), 0);
-        // v34.2.6: show max set weight (same fix as exercise progression view).
-        const _sExSets = Array.isArray(ex.sets) ? ex.sets.filter(s => s.reps != null) : [];
-        const _sExWts = _sExSets.map(s => parseWeightNumber_(s.weight)).filter(v => v != null);
-        const _sExMaxW = _sExWts.length ? Math.max(..._sExWts) : null;
-        const _sDisplayW = _sExMaxW != null ? String(_sExMaxW) : (ex.weight === '' || ex.weight == null ? '—' : String(ex.weight));
         list.appendChild(el('div', {
           class: 'card session-ex progression-tap',
           onclick: () => {
@@ -6377,7 +6556,7 @@ TYPE html>
           el('div', { class: 'session-ex-stats' }, [
             el('div', { class: 'session-stat' }, [
               el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Weight'),
-              el('div', { class: 'session-stat-val' }, _sDisplayW),
+              el('div', { class: 'session-stat-val' }, ex.weight === '' || ex.weight == null ? '—' : String(ex.weight)),
             ]),
             el('div', { class: 'session-stat' }, [
               el('div', { class: 'muted', style: 'font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;' }, 'Reps'),
@@ -6422,17 +6601,12 @@ TYPE html>
         // v34.1: extract from sets[] when present so 5+ set exercises
         // (5/3/1 back-off, myoreps, drop sets) count their real total.
         const setReps = extractExerciseReps_(match);
-        // v34.2.6: use true max weight from sets[] (per-set weights for
-        // 5/3/1 and similar) instead of the exercise-level weight field.
-        const _exSets = Array.isArray(match.sets) ? match.sets.filter(s => s.reps != null) : [];
-        const _exSetWts = _exSets.map(s => parseWeightNumber_(s.weight)).filter(v => v != null);
-        const _exMaxW = _exSetWts.length ? Math.max(..._exSetWts) : null;
         out.push({
           date:     s.date,
           block:    s.block_name,
           week:     s.week,
           day:      s.day,
-          weight:   _exMaxW != null ? _exMaxW : match.weight,
+          weight:   match.weight,
           setReps:  setReps,
           totalReps: setReps.reduce((a, b) => a + (b || 0), 0),
           notes:    match.notes || '',
@@ -6859,12 +7033,17 @@ TYPE html>
               const first = parsed.errors[0];
               throw new Error(`CSV parse error (row ${first.row}): ${first.message}`);
             }
-            const structure = programStructureFromRows_(parsed.data, dayTitlesInp.value.trim());
+            const parseOut = programStructureFromRows_(parsed.data, dayTitlesInp.value.trim());
+            const structure = parseOut.structure;
+            const planType  = parseOut.planType;
             status.textContent = 'Uploading…';
-            const result = await sbUpsertProgramFromCsv(name, structure, notesInp.value.trim() || null);
-            const exCount = structure.weeks.reduce((sum, w) =>
+            const result = await sbUpsertProgramFromCsv(name, structure, notesInp.value.trim() || null, planType);
+            // v34.3: count items honestly — exercises for lifts, sessions for runs.
+            const itemCount = structure.weeks.reduce((sum, w) =>
               sum + Object.values(w.days || {}).reduce((s, arr) => s + arr.length, 0), 0);
-            toast(`${result.updated ? 'Updated' : 'Imported'} "${name}" — ${structure.weeks_total} weeks · ${exCount} exercises`);
+            const noun = planType === 'run' ? 'sessions' : 'exercises';
+            const typeLabel = planType === 'run' ? 'run' : 'lift';
+            toast(`${result.updated ? 'Updated' : 'Imported'} "${name}" (${typeLabel}) — ${structure.weeks_total} weeks · ${itemCount} ${noun}`);
             setTimeout(() => render('programs'), 700);
           } catch (e) {
             status.textContent = 'Failed: ' + (e.message || String(e));
@@ -6889,7 +7068,7 @@ TYPE html>
           el('div', { style: 'font-weight: 600; font-size: 14px;' }, 'Program CSV'),
         ]),
         el('div', { class: 'muted', style: 'font-size: 12px; margin-bottom: 12px; line-height: 1.4;' },
-          'Reusable lift templates. One row per exercise per week per day. Re-importing with the same name updates the existing program.'),
+          'Lift and run plans both supported. Auto-detects type from your columns (Percent/Target Weight → lift, Target Pace/Treadmill mph → run). Re-importing with the same name updates the existing program.'),
         nameInp,
         dayTitlesInp,
         notesInp,
@@ -6962,12 +7141,16 @@ TYPE html>
       const s = p.structure || {};
       const weeks = s.weeks_total || (s.weeks ? s.weeks.length : 0);
       const dayLetters = (s.day_letters || []).join('/');
-      const exCount = (s.weeks || []).reduce((sum, w) =>
+      const itemCount = (s.weeks || []).reduce((sum, w) =>
         sum + Object.values(w.days || {}).reduce((s2, arr) => s2 + (arr ? arr.length : 0), 0), 0);
+      // v34.3: use plan_type to label counts honestly — "sessions" for runs,
+      // "exercises" for lifts. Falls through to "entries" for ambiguous.
+      const type = p.plan_type || s.plan_type || 'lift';
+      const noun = type === 'run' ? 'sessions' : 'exercises';
       const meta = [
         weeks ? `${weeks} weeks` : '',
         dayLetters ? `Days ${dayLetters}` : '',
-        exCount ? `${exCount} exercises` : '',
+        itemCount ? `${itemCount} ${noun}` : '',
       ].filter(Boolean).join(' · ');
 
       const typeLabels = { run: 'RUN', lift: 'LIFT', cycle: 'CYCLE', general: 'GENERAL' };
@@ -7042,10 +7225,14 @@ TYPE html>
       const weeks = s.weeks || [];
       const dayLetters = s.day_letters || [];
       const dayTitles = s.day_titles || {};
-      const exCount = weeks.reduce((sum, w) =>
+      const itemCount = weeks.reduce((sum, w) =>
         sum + Object.values(w.days || {}).reduce((s2, arr) => s2 + (arr ? arr.length : 0), 0), 0);
 
-      const progType = p.plan_type || 'lift';
+      // v34.3: branch render based on plan_type. Runs show session cards
+      // with warm-up/main/cool-down + pace; lifts show exercise rows.
+      const progType = p.plan_type || s.plan_type || 'lift';
+      const isRunProgram = progType === 'run';
+      const itemNoun = isRunProgram ? 'sessions' : 'exercises';
       const progTypeSel = el('select', {
         style: 'width: auto; padding: 4px 24px 4px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;',
       }, [
@@ -7070,7 +7257,7 @@ TYPE html>
           el('div', { style: 'flex: 1;' }, [
             el('div', { class: 'program-name', style: 'font-size: 18px;' }, p.name),
             el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 4px;' },
-              `${s.weeks_total || weeks.length} weeks · ${dayLetters.join('/')} · ${exCount} exercises`),
+              `${s.weeks_total || weeks.length} weeks · ${dayLetters.join('/')} · ${itemCount} ${itemNoun}`),
             p.notes ? el('div', { class: 'muted', style: 'font-size: 13px; margin-top: 6px;' }, p.notes) : null,
           ]),
           p.active ? el('span', { class: 'program-badge active' }, 'ACTIVE')
@@ -7142,7 +7329,7 @@ TYPE html>
       const weeksContainer = el('div');
       weeks.forEach(w => {
         const dayCount = Object.keys(w.days || {}).length;
-        const exTotal = Object.values(w.days || {}).reduce((s, arr) => s + (arr ? arr.length : 0), 0);
+        const itemTotal = Object.values(w.days || {}).reduce((s, arr) => s + (arr ? arr.length : 0), 0);
         const card = el('div', { class: 'card week-card' });
         const headerEl = el('button', {
           class: 'week-header',
@@ -7156,29 +7343,88 @@ TYPE html>
             el('div', { class: 'week-num' }, `Week ${w.week}`),
             w.block_name ? el('div', { class: 'muted', style: 'font-size: 11px;' }, w.block_name) : null,
           ]),
-          el('div', { class: 'muted', style: 'font-size: 12px;' }, `${dayCount} days · ${exTotal} exercises`),
+          el('div', { class: 'muted', style: 'font-size: 12px;' }, `${dayCount} days · ${itemTotal} ${itemNoun}`),
         ]);
         card.appendChild(headerEl);
 
         const body = el('div', { class: 'week-body' });
         dayLetters.forEach(letter => {
-          const exs = (w.days && w.days[letter]) || [];
-          if (!exs.length) return;
-          const dayTitle = dayTitles[letter] || `Day ${letter}`;
-          body.appendChild(el('div', { class: 'day-block' }, [
-            el('div', { class: 'day-title' }, `Day ${letter} — ${dayTitle}`),
-            ...exs.map(ex => el('div', { class: 'ex-row' }, [
-              el('div', { class: 'ex-name' }, ex.name),
-              el('div', { class: 'muted', style: 'font-size: 12px;' },
-                `${ex.sets || '?'} × ${ex.target_reps || '?'}${ex.category ? ' · ' + ex.category : ''}`),
-              ex.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic;' }, ex.notes) : null,
-            ])),
-          ]));
+          const items = (w.days && w.days[letter]) || [];
+          if (!items.length) return;
+          const dayTitle = dayTitles[letter.toUpperCase()] || dayTitles[letter] || letter;
+          // v34.3: branch render per plan type.
+          if (isRunProgram) {
+            body.appendChild(el('div', { class: 'day-block' }, [
+              el('div', { class: 'day-title' }, dayTitle === letter ? letter : `${letter} — ${dayTitle}`),
+              ...items.map(sess => renderRunSessionDetail_(sess)),
+            ]));
+          } else {
+            body.appendChild(el('div', { class: 'day-block' }, [
+              el('div', { class: 'day-title' }, dayTitle === letter ? `Day ${letter}` : `Day ${letter} — ${dayTitle}`),
+              ...items.map(ex => renderLiftExerciseDetail_(ex)),
+            ]));
+          }
         });
         card.appendChild(body);
         weeksContainer.appendChild(card);
       });
       app.appendChild(weeksContainer);
+    }
+
+    // v34.3: render one lift exercise with its sets (if aggregated) or
+    // fall back to the legacy sets/target_reps summary.
+    function renderLiftExerciseDetail_(ex) {
+      const hasSetsArr = Array.isArray(ex.sets) && ex.sets.length > 0;
+      const parts = [];
+      if (hasSetsArr) {
+        // Group consecutive identical sets so "3 × 8 @ 65%" collapses.
+        const groups = groupIdenticalSets_(ex.sets);
+        groups.forEach(g => {
+          const s = g.set;
+          const bits = [];
+          if (g.count > 1) bits.push(`${g.count} ×`);
+          if (s.set_type)      bits.push(s.set_type);
+          if (s.target_reps)   bits.push(`${s.target_reps} reps`);
+          if (s.percent != null) bits.push(`${s.percent}%`);
+          if (s.target_weight) bits.push(`${s.target_weight} lb`);
+          if (s.rest)          bits.push(`rest ${s.rest}`);
+          parts.push(bits.join(' · '));
+        });
+      } else if (ex.sets || ex.target_reps) {
+        parts.push(`${ex.sets || '?'} × ${ex.target_reps || '?'}`);
+      }
+      if (ex.category && !parts.join('').includes(ex.category)) parts.unshift(ex.category);
+      return el('div', { class: 'ex-row' }, [
+        el('div', { class: 'ex-name' }, ex.name),
+        parts.length ? el('div', { class: 'muted', style: 'font-size: 12px;' }, parts.join(' · ')) : null,
+        ex.notes ? el('div', { class: 'muted', style: 'font-size: 11px; font-style: italic;' }, ex.notes) : null,
+      ]);
+    }
+
+    // v34.3: render one run session with session name + pace + warm-up/
+    // main/cool-down. Mirrors the training-plan viewer's run card layout.
+    function renderRunSessionDetail_(sess) {
+      const metaBits = [];
+      if (sess.target_pace_hr) metaBits.push(sess.target_pace_hr);
+      if (sess.target_mph)     metaBits.push(sess.target_mph);
+      return el('div', { class: 'ex-row', style: 'padding: 10px 12px; border-left: 3px solid var(--primary); background: color-mix(in srgb, var(--primary) 4%, var(--surface-2)); border-radius: 8px; margin-bottom: 10px;' }, [
+        el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' }, [
+          el('div', { class: 'ex-name', style: 'font-weight: 700;' }, sess.name || 'Run'),
+          metaBits.length ? el('div', { class: 'muted', style: 'font-size: 12px;' }, metaBits.join(' · ')) : null,
+        ]),
+        sess.warm_up ? el('div', { style: 'margin-top: 6px; font-size: 12px;' }, [
+          el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px;' }, 'Warm-up:'),
+          sess.warm_up,
+        ]) : null,
+        sess.main_set ? el('div', { style: 'margin-top: 4px; font-size: 12px;' }, [
+          el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px;' }, 'Main set:'),
+          sess.main_set,
+        ]) : null,
+        sess.cool_down ? el('div', { style: 'margin-top: 4px; font-size: 12px;' }, [
+          el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px;' }, 'Cool-down:'),
+          sess.cool_down,
+        ]) : null,
+      ]);
     }
 
     // -------- Modality catalog + profile helpers --------
