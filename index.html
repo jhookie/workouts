@@ -1881,6 +1881,25 @@ TYPE html>
       _activeProgramCacheAt = 0;
     }
 
+    // v34.4: fetch the active program for a SPECIFIC plan_type. Used by
+    // the program-aware Run logger — sbActiveProgram orders by plan_type
+    // alphabetically ('cycle' < 'general' < 'lift' < 'run') and returns
+    // the first match, so a user with both lift and run active would get
+    // the lift program back, not run. This variant filters so we always
+    // find the right program for the logger we're building.
+    async function sbActiveProgramByType_(planType) {
+      const uid = currentUser.id;
+      const { data, error } = await _sb.from('programs')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('active', true)
+        .eq('plan_type', planType)
+        .is('archived_at', null)
+        .limit(1);
+      if (error) throw new Error(error.message);
+      return (data && data[0]) || null;
+    }
+
     async function sbLogRun(run) {
       const uid = currentUser.id;
       const parts = (run.time || '').split(':');
@@ -1893,7 +1912,24 @@ TYPE html>
       }
       const { data: dup } = await _sb.from('runs').select('id').eq('user_id', uid).eq('date', run.date).eq('distance', String(run.distance)).limit(1);
       if (dup && dup.length) return { duplicate: true, pace };
-      const { error } = await _sb.from('runs').insert({ user_id: uid, date: run.date, distance: run.distance, duration_secs: dur || null, pace, notes: run.notes || null, shoe_id });
+      // v34.4: optional program metadata (program_id, program_week,
+      // program_day, session_name) when the run was logged against an
+      // active Run program. Defensive — if the DB columns don't exist
+      // yet, retry the insert without them so logging never breaks.
+      const baseRow = { user_id: uid, date: run.date, distance: run.distance, duration_secs: dur || null, pace, notes: run.notes || null, shoe_id };
+      const programRow = run.programMeta ? {
+        program_id:    run.programMeta.program_id   || null,
+        program_week:  run.programMeta.program_week || null,
+        program_day:   run.programMeta.program_day  || null,
+        session_name:  run.programMeta.session_name || null,
+      } : null;
+      let insertRow = programRow ? { ...baseRow, ...programRow } : baseRow;
+      let { error } = await _sb.from('runs').insert(insertRow);
+      if (error && programRow && /program_|column .* does not exist/i.test(error.message || '')) {
+        console.warn('[runs] program_* columns missing — logging without metadata. Add the migration to persist program context.');
+        const retry = await _sb.from('runs').insert(baseRow);
+        error = retry.error;
+      }
       if (error) throw new Error(error.message);
       return { duplicate: false, pace: pace || '?' };
     }
@@ -1911,7 +1947,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.3.3';
+    const APP_VERSION = 'v34.4';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -3833,6 +3869,54 @@ TYPE html>
     // Look at the most recent lift session and return the NEXT day-letter
     // after it within the given dayLetters array (cycles back to the first
     // after the last). Returns dayLetters[0] if there's no history.
+    // v34.4: pull the session template out of the active Run program's
+    // structure for a specific (week, day) selection. Returns the parsed
+    // session object (name, workout_kind, warm_up, main_set, cool_down,
+    // target_pace_hr, target_mph, phases) OR null if not found. Caller
+    // handles the empty case.
+    async function loadRunTemplate_(sel) {
+      try {
+        const ap = await sbActiveProgramByType_('run');
+        if (!ap || !ap.structure || !Array.isArray(ap.structure.weeks)) return { source: 'none', program: null, session: null };
+        const weekRow = ap.structure.weeks.find(w => Number(w.week) === Number(sel.week));
+        if (!weekRow || !weekRow.days) return { source: 'none', program: ap, session: null };
+        // Day key lookup — honor both original case and uppercased variant.
+        const items = weekRow.days[sel.day] || weekRow.days[String(sel.day).toUpperCase()] || weekRow.days[String(sel.day).trim()];
+        if (!Array.isArray(items) || !items.length) return { source: 'none', program: ap, session: null };
+        // Each run day has one session (post-aggregation).
+        return { source: 'program', program: ap, session: items[0] };
+      } catch (e) {
+        console.warn('[run-template] load failed:', e.message || e);
+        return { source: 'none', program: null, session: null };
+      }
+    }
+
+    // v34.4: suggest the next run day based on the most recent run logged
+    // from this program. Reads program_day from runs; if absent (legacy
+    // runs, or user hasn't logged against this program yet), returns the
+    // first day in rotation. Falls through gracefully if the program_day
+    // column doesn't exist yet (v34.4 migration not run).
+    async function suggestNextRunDay_(dayKeys) {
+      if (!Array.isArray(dayKeys) || !dayKeys.length) return 'Day 1';
+      try {
+        const uid = currentUser.id;
+        const { data, error } = await _sb.from('runs')
+          .select('program_day,date')
+          .eq('user_id', uid)
+          .not('program_day', 'is', null)
+          .order('date', { ascending: false })
+          .limit(1);
+        if (error) return dayKeys[0];
+        if (!data || !data.length) return dayKeys[0];
+        const lastDay = String(data[0].program_day || '');
+        const idx = dayKeys.indexOf(lastDay);
+        if (idx === -1) return dayKeys[0];
+        return dayKeys[(idx + 1) % dayKeys.length];
+      } catch (e) {
+        return dayKeys[0];
+      }
+    }
+
     async function suggestNextLiftDay_(dayLetters) {
       if (!Array.isArray(dayLetters) || !dayLetters.length) return 'A';
       const uid = currentUser.id;
@@ -5149,6 +5233,12 @@ TYPE html>
       fetchAndRenderExercises();
     }
 
+    // v34.4: track Run program selection across re-renders (mirrors
+    // liftSelection pattern). Reset when the user signs out.
+    let runSelection = null; // { week, day }
+    let runSelectorOpen = false;
+    let _bypassRunProgramForRun = false; // set by "log outside program" button
+
     async function renderRun(app) {
       // v33.2 fix (Bug #4): mirror the Lift "already logged today?" auto-
       // route. If the user taps Run from Home and today already has a
@@ -5158,7 +5248,7 @@ TYPE html>
       // sensibly. Guarded by _bypassRunAutoRouteForRun in case we
       // ever add a "log another run today" button.
       const preRunView = _previousView;
-      if (!_planRunPrefill && !_bypassRunAutoRouteForRun) {
+      if (!_planRunPrefill && !_bypassRunAutoRouteForRun && !_bypassRunProgramForRun) {
         try {
           const today = todayISO();
           const { data: existingRuns } = await _sb.from('runs')
@@ -5172,27 +5262,24 @@ TYPE html>
       }
       _bypassRunAutoRouteForRun = false;
 
+      // v34.4: route to program-aware logger when an active Run program
+      // exists. The _bypassRunProgramForRun flag lets users escape to the
+      // plain log form via "+ Log a run outside this program".
+      let activeRunProgram = null;
+      if (!_planRunPrefill && !_bypassRunProgramForRun) {
+        try { activeRunProgram = await sbActiveProgramByType_('run'); } catch (e) {}
+      }
+      _bypassRunProgramForRun = false;
+
+      if (activeRunProgram && activeRunProgram.structure && Array.isArray(activeRunProgram.structure.weeks) && activeRunProgram.structure.weeks.length) {
+        return renderRunProgram_(app, activeRunProgram, preRunView);
+      }
+
       // Pull off any pre-fill from a training plan tap (target miles + notes).
       const prefill = _planRunPrefill;
       _planRunPrefill = null;
 
-      app.appendChild(el('header', { class: 'top' }, [
-        el('h1', {}, 'Log Run'),
-        el('span', { class: 'date' }, fmtDateLong(new Date())),
-      ]));
-      // v33.3 fix (Bug #4 followup): Log Run form was headerless / no way
-      // back. Mirror the Lift screen's back-link so users can bail out
-      // when the auto-route doesn't fire (no run logged today).
-      const backToRun = preRunView && !['run', 'run-edit'].includes(preRunView) ? preRunView : 'home';
-      const backRunLabel = backToRun === 'home' ? '← Back to Home'
-                         : backToRun === 'calendar' ? '← Back to Calendar'
-                         : backToRun === 'training-plan' ? '← Back to plan'
-                         : '← Back';
-      app.appendChild(el('button', {
-        class: 'btn-link',
-        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
-        onclick: () => render(backToRun),
-      }, backRunLabel));
+      renderRunHeaderAndBackBtn_(app, preRunView);
 
       if (prefill) {
         app.appendChild(el('div', {
@@ -5205,16 +5292,182 @@ TYPE html>
         ]));
       }
 
-      // Pre-fetch shoes for the dropdown (best-effort; if offline, dropdown is empty)
+      await renderRunLogForm_(app, { prefill });
+    }
+
+    // Shared header + back button for both program-aware and plain run paths.
+    function renderRunHeaderAndBackBtn_(app, preRunView) {
+      app.appendChild(el('header', { class: 'top' }, [
+        el('h1', {}, 'Log Run'),
+        el('span', { class: 'date' }, fmtDateLong(new Date())),
+      ]));
+      const backToRun = preRunView && !['run', 'run-edit'].includes(preRunView) ? preRunView : 'home';
+      const backRunLabel = backToRun === 'home' ? '← Back to Home'
+                         : backToRun === 'calendar' ? '← Back to Calendar'
+                         : backToRun === 'training-plan' ? '← Back to plan'
+                         : '← Back';
+      app.appendChild(el('button', {
+        class: 'btn-link',
+        style: 'background: transparent; color: var(--muted); border: none; padding: 0; margin-bottom: 8px; text-align: left; width: auto; font-size: 13px;',
+        onclick: () => render(backToRun),
+      }, backRunLabel));
+    }
+
+    // v34.4: program-aware Run logger. Mirrors renderLift's Block/Week/Day
+    // selector + exercise preview pattern, adapted for runs: Week + Day
+    // pills, session preview card (name, pace, warm-up / main / cool-down),
+    // then the standard log form (distance, time, shoe, notes). On save,
+    // writes program metadata so history can show "Day 1 Sub-T intervals"
+    // instead of just a date + distance.
+    async function renderRunProgram_(app, program, preRunView) {
+      renderRunHeaderAndBackBtn_(app, preRunView);
+
+      // Escape hatch — jump to the plain log form.
+      app.appendChild(el('button', {
+        style: 'margin-bottom: 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-size: 13px; padding: 8px 14px; width: auto;',
+        onclick: () => { _bypassRunProgramForRun = true; render('run'); },
+      }, '+ Log a run outside this program'));
+
+      const s = program.structure || {};
+      const weeksAvail = (s.weeks || []).map(w => Number(w.week)).sort((a, b) => a - b);
+      const dayKeys = (s.day_letters || []).slice();
+      if (!weeksAvail.length || !dayKeys.length) {
+        app.appendChild(el('div', { class: 'card' }, 'This program has no sessions defined.'));
+        return;
+      }
+
+      // Initialize runSelection if not set. Default day: next in rotation
+      // based on the most recent run logged against this program.
+      if (!runSelection || !weeksAvail.includes(runSelection.week) || !dayKeys.includes(runSelection.day)) {
+        const nextDay = await suggestNextRunDay_(dayKeys).catch(() => dayKeys[0]);
+        runSelection = { week: weeksAvail[0], day: nextDay };
+      }
+
+      // Selector card — program name + current pick + Change pill.
+      const selectorCard = el('div', { class: 'card', id: 'runSelectorCard' });
+      app.appendChild(selectorCard);
+
+      // Session preview card (updated by renderPreview below).
+      const previewCard = el('div', { id: 'runPreviewCard' });
+      app.appendChild(previewCard);
+
+      // Log form (date, distance, time, shoe, notes).
+      const formCard = el('div', { id: 'runLogFormCard' });
+      app.appendChild(formCard);
+
+      function renderSelector() {
+        selectorCard.innerHTML = '';
+        selectorCard.appendChild(el('div', { class: 'selector-summary' }, [
+          el('div', {}, [
+            el('div', { class: 'label' }, program.name),
+            el('div', { class: 'value' }, `Week ${runSelection.week} · ${runSelection.day}`),
+          ]),
+          el('button', {
+            class: 'edit',
+            onclick: () => { runSelectorOpen = !runSelectorOpen; renderSelector(); },
+          }, runSelectorOpen ? 'Done' : 'Change'),
+        ]));
+        if (runSelectorOpen) {
+          const body = el('div', { class: 'selector-body' });
+          body.appendChild(el('div', { class: 'pill-row-label' }, 'Week'));
+          const weekRow = el('div', { class: 'pill-row' });
+          weeksAvail.forEach(w => {
+            weekRow.appendChild(el('button', {
+              class: 'pill-btn' + (w === runSelection.week ? ' active' : ''),
+              onclick: () => { runSelection.week = w; renderSelector(); renderPreview(); renderForm(); },
+            }, 'W' + w));
+          });
+          body.appendChild(weekRow);
+          body.appendChild(el('div', { class: 'pill-row-label' }, 'Day'));
+          const dayRow = el('div', { class: 'pill-row' });
+          dayKeys.forEach(d => {
+            dayRow.appendChild(el('button', {
+              class: 'pill-btn' + (d === runSelection.day ? ' active' : ''),
+              onclick: () => { runSelection.day = d; renderSelector(); renderPreview(); renderForm(); },
+            }, d));
+          });
+          body.appendChild(dayRow);
+          selectorCard.appendChild(body);
+        }
+      }
+
+      async function renderPreview() {
+        previewCard.innerHTML = '';
+        const tpl = await loadRunTemplate_({ week: runSelection.week, day: runSelection.day });
+        if (!tpl.session) {
+          previewCard.appendChild(el('div', { class: 'card' }, [
+            el('div', { class: 'muted', style: 'font-size: 13px;' },
+              'No session scheduled for this week/day. Pick another or log outside the program.'),
+          ]));
+          return;
+        }
+        const sess = tpl.session;
+        const kindColors = {
+          easy:'#32d74b', long:'#5ac8fa', marathon:'#5ac8fa',
+          tempo:'#ff9f0a', threshold:'#ff9f0a',
+          interval:'#ff453a', vo2:'#ff453a',
+          repetition:'#bf5af2', rep:'#bf5af2', race:'#ff375f',
+        };
+        const kColor = kindColors[sess.workout_kind] || 'var(--primary)';
+        const metaBits = [];
+        if (sess.target_pace_hr) metaBits.push(sess.target_pace_hr);
+        if (sess.target_mph)     metaBits.push(sess.target_mph);
+        previewCard.appendChild(el('div', { class: 'card', style: `border-left: 3px solid ${kColor};` }, [
+          el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' }, [
+            el('div', { style: 'font-weight: 700; font-size: 15px;' }, [
+              sess.name || 'Run',
+              sess.workout_kind ? el('span', { style: `margin-left: 8px; font-size: 10px; color: ${kColor}; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;` }, sess.workout_kind) : null,
+            ]),
+            metaBits.length ? el('div', { class: 'muted', style: 'font-size: 12px;' }, metaBits.join(' · ')) : null,
+          ]),
+          sess.warm_up ? el('div', { style: 'margin-top: 10px; font-size: 13px;' }, [
+            el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px; font-size: 11px;' }, 'Warm-up:'),
+            sess.warm_up,
+          ]) : null,
+          sess.main_set ? el('div', { style: 'margin-top: 6px; font-size: 13px;' }, [
+            el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px; font-size: 11px;' }, 'Main set:'),
+            sess.main_set,
+          ]) : null,
+          sess.cool_down ? el('div', { style: 'margin-top: 6px; font-size: 13px;' }, [
+            el('span', { class: 'muted', style: 'text-transform: uppercase; font-weight: 600; letter-spacing: 0.06em; margin-right: 6px; font-size: 11px;' }, 'Cool-down:'),
+            sess.cool_down,
+          ]) : null,
+        ]));
+      }
+
+      async function renderForm() {
+        formCard.innerHTML = '';
+        const tpl = await loadRunTemplate_({ week: runSelection.week, day: runSelection.day });
+        const sess = tpl.session;
+        const programMeta = {
+          program_id:   program.id,
+          program_week: runSelection.week,
+          program_day:  runSelection.day,
+          session_name: sess ? sess.name : null,
+        };
+        await renderRunLogForm_(formCard, { programMeta });
+      }
+
+      renderSelector();
+      await renderPreview();
+      await renderForm();
+    }
+
+    // Shared log form renderer — used by both plain and program-aware paths.
+    // `opts.prefill` = { date?, distance?, notes? } for training-plan prefills.
+    // `opts.programMeta` = program context to persist on the row.
+    async function renderRunLogForm_(container, opts) {
+      const prefill = (opts && opts.prefill) || {};
+      const programMeta = (opts && opts.programMeta) || null;
+
       let shoes = [];
       try { const allShoes = await sbShoes(); shoes = allShoes.filter(s => s.active); } catch (e) {}
-
       const shoeOptions = [el('option', { value: '' }, '— Select shoe —')]
         .concat(shoes.map(s => el('option', { value: s.name }, `${s.name} (${s.totalMiles} mi)`)));
 
-      app.appendChild(el('div', { class: 'card' }, [
-        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: (prefill && prefill.date) || todayISO() })]),
-        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1', value: (prefill && prefill.distance != null) ? String(prefill.distance) : '' })]),
+      container.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'field' }, [el('label', {}, 'Date'), el('input', { id: 'runDate', type: 'date', value: prefill.date || todayISO() })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Distance (mi)'), el('input', { id: 'runDist', type: 'number', step: '0.01', inputmode: 'decimal', placeholder: '3.1', value: prefill.distance != null ? String(prefill.distance) : '' })]),
         el('div', { class: 'field' }, [
           el('label', {}, 'Time'),
           el('div', { class: 'time-row' }, [
@@ -5222,17 +5475,13 @@ TYPE html>
             el('div', { class: 'sep' }, ':'),
             el('input', { id: 'runSec', type: 'text', inputmode: 'numeric', placeholder: '00', min: '0', max: '59' }),
           ]),
-          el('div', { class: 'time-sub' }, [
-            el('div', {}, 'min'),
-            el('div', {}, ''),
-            el('div', {}, 'sec'),
-          ]),
+          el('div', { class: 'time-sub' }, [el('div', {}, 'min'), el('div', {}, ''), el('div', {}, 'sec')]),
         ]),
         el('div', { class: 'field' }, [
           el('label', {}, 'Shoe'),
           el('select', { id: 'runShoe' }, shoeOptions),
         ]),
-        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.', value: (prefill && prefill.notes) || '' })]),
+        el('div', { class: 'field' }, [el('label', {}, 'Notes (optional)'), el('input', { id: 'runNotes', type: 'text', placeholder: 'Outside, easy, etc.', value: prefill.notes || '' })]),
         el('button', {
           onclick: async () => {
             const date = $('#runDate').value;
@@ -5248,7 +5497,7 @@ TYPE html>
             const ss = String(Number(secRaw) || 0).padStart(2, '0');
             const normalized = `${mm}:${ss}:00`;
             try {
-              const res = await sbLogRun({ date, distance, time: normalized, notes, shoe });
+              const res = await sbLogRun({ date, distance, time: normalized, notes, shoe, programMeta });
               if (res.duplicate) toast('Already logged — no duplicate added');
               else toast('Logged · ' + res.pace + '/mi');
               setTimeout(() => render('home'), 900);
