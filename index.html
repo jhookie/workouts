@@ -1911,7 +1911,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.3.2';
+    const APP_VERSION = 'v34.3.3';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -4522,21 +4522,30 @@ TYPE html>
             const s = prog.structure || {};
             const dayLetters = s.day_letters || [];
             const weekCount = s.weeks_total || (Array.isArray(s.weeks) ? s.weeks.length : 0);
-            const typeLabel = (prog.plan_type || 'lift').toUpperCase();
+            const planType  = prog.plan_type || s.plan_type || 'lift';
+            const typeLabel = planType.toUpperCase();
+            // v34.3.3: route run programs to the Run logger, lift to the
+            // Lift logger. Before this fix both routed to 'lift', so a run
+            // program in Today's Workout opened the lift logger.
+            const isRun     = planType === 'run';
+            const rowLabel  = isRun ? 'Log a run from this program →' : 'Log a lift from this program →';
             card.appendChild(el('div', {
               style: baseStyle,
               onclick: () => {
-                // v32.4.3: bypass the training plan auto-route so the
-                // program row actually opens the PROGRAM'S logger even
-                // when a training plan has a lift scheduled for today.
-                _bypassPlanAutoRouteForLift = true;
-                render('lift');
+                if (isRun) {
+                  render('run');
+                } else {
+                  // v32.4.3: bypass the training plan auto-route so the
+                  // program row actually opens the PROGRAM'S logger even
+                  // when a training plan has a lift scheduled for today.
+                  _bypassPlanAutoRouteForLift = true;
+                  render('lift');
+                }
               },
             }, [
               el('div', { class: 'muted', style: 'font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;' },
                 `${typeLabel} · ${prog.name}`),
-              el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' },
-                'Log a lift from this program →'),
+              el('div', { style: 'margin-top: 4px; font-size: 15px; font-weight: 600;' }, rowLabel),
               el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 2px;' },
                 `${weekCount} weeks · Days ${dayLetters.join('/')}`),
             ]));
