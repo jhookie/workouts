@@ -1947,7 +1947,7 @@ TYPE html>
 
     // Generic activity logger for modalities without specialized data
     // (cycling, hiking, swimming, rowing, yoga, walking-variant, other).
-    const APP_VERSION = 'v34.4.1';
+    const APP_VERSION = 'v34.4.2';
 
     // v34.2: theme system. Three values persisted in localStorage:
     //   'light' — always light
@@ -9854,6 +9854,22 @@ TYPE html>
     async function renderRunEdit(app) {
       const ref = _runEditRef;
       editHeader_(app, 'Edit run', () => { const back = editBackTo_(); _runEditRef = null; render(back); });
+      // v34.4.2: escape hatch. Users land here from Home → Run when
+      // today has a run logged (auto-route to edit the existing one),
+      // but sometimes they actually want to log a NEW run — either a
+      // second one for today (double) OR a back-dated one for an earlier
+      // date they forgot. Previously trapped: no path to the log form.
+      // This link sets _bypassRunAutoRouteForRun and re-renders Run,
+      // which lands on the program-aware (or plain) log form with the
+      // date picker available to backfill any date.
+      app.appendChild(el('button', {
+        style: 'margin: -4px 0 10px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-size: 13px; padding: 8px 14px; width: auto;',
+        onclick: () => {
+          _runEditRef = null;
+          _bypassRunAutoRouteForRun = true;
+          render('run');
+        },
+      }, '+ Log a new run instead'));
       if (!ref || !ref.id) {
         app.appendChild(el('div', { class: 'card' }, 'No run selected.'));
         return;
